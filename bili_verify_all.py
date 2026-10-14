@@ -52,12 +52,48 @@ def main():
     ap.add_argument("--install", action="store_true",
                     help="把校验通过（全 PASS）的产物装进 ~/.local/share/billion-context/sessions/")
     ap.add_argument("--report", default="", help="把详细报告写到该文件")
+    ap.add_argument("--prune", action="store_true",
+                    help="删除同会话的陈旧产物文件（去重时保留下来的那个除外）")
     args = ap.parse_args()
 
     out_root = pathlib.Path(os.path.expanduser(args.out))
     acpdir = pathlib.Path(os.path.expanduser(args.acp))
     db = os.path.expanduser(args.db)
     items = find_out(out_root)
+
+    # 同一会话可能有两个产物文件：转换参数变化会改文件名（如下载 models-dev.json 后
+    # 扁平名 <hash>.json 变规范名 <host>_<hash>.json），旧文件留在目录里就成了
+    # "陈旧产物"，校验必 FAIL 且误导排查。按记录 id 去重：保留规范名（其次最新 mtime）。
+    import re
+    by_sid = {}
+    for path, d in items:
+        by_sid.setdefault(d.get("id") or "", []).append(path)
+    deduped, dropped = [], []
+    for sid, paths in by_sid.items():
+        if len(paths) == 1:
+            deduped.append(paths[0])
+            continue
+        def rank(p):
+            canon = 1 if re.match(r"^[A-Za-z0-9.\-]+_[0-9a-f]{24}$", p.stem) else 0
+            return (canon, p.stat().st_mtime)
+        keep = max(paths, key=rank)
+        deduped.append(keep)
+        for p in paths:
+            if p != keep:
+                dropped.append((p, keep))
+    if dropped:
+        print(f"[去重] 发现 {len(dropped)} 个同会话陈旧产物（保留规范名/最新者，其余不校验、不安装）：")
+        for p, keep in dropped:
+            print(f"  弃 {p.name}  ←→  用 {keep.name}")
+        if args.prune:
+            for p, _ in dropped:
+                p.unlink()
+            print(f"[去重] 已删除 {len(dropped)} 个陈旧产物文件")
+        else:
+            print("[去重] 加 --prune 可直接删除这些文件")
+    item_map = {p: d for p, d in items}
+    items = [(p, item_map[p]) for p in deduped]
+
     if args.limit:
         items = items[:args.limit]
     if not items:

@@ -20,10 +20,10 @@ expect() {   # expect <文件> <md5> <sha256> <字节数>
   fi
 }
 
-# v4（2026-10-15）：形态判定改为 force > 实测 > catalog > heuristic
+# v4.1（2026-10-15）：verify_all 增加同会话产物去重（--prune 可删陈旧副本）
 expect bili_convert.py     58496d1ec57c6bea9a0b80c959f6ce9e 0fc558a475b39f540c7ed077df4f831353790c62220b403d0c6b6b9d6340e920 38350
 expect bili_verify.py      fca07b9d4f4c7ac1012cf08d3362ec4e 820a9fcdf76f2c17245e23d0069de85a8b8220dfdd94d990977afdead13d29ef 16071
-expect bili_verify_all.py  c98f9cae4859ff79679290be9f831f69 b7890934faaf1012c8e0a3566b76ac600f6ea65c0ca8200f617a68699745907e 6735
+expect bili_verify_all.py  819c9c0a598906d69c1fa47d32938635 cd44aac72c2137e8e445c441cff45465ecf00fd39cd3ea97bcc3289b73c2bb58 8391
 expect bili_wire_diff.py   fb54a913e4eab5c02cdfeadb3d7d75ea b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16 12391
 expect probe_residual.py   ae5704282a4cd9943f6055644384747f 1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749 3986
 
