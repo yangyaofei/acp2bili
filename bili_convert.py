@@ -505,9 +505,21 @@ def cores_from_dump(dump_path, rows):
     return cores, cores_of_msg, stats
 
 
+_CONN_CACHE = {}
+
+
+def _db(db_path):
+    """共享只读连接。批量转换时每个会话都查库，若各自 connect，
+    老机默认 ulimit -n 256 会累积到 EMFILE（Too many open files）。"""
+    key = str(pathlib.Path(db_path).expanduser().resolve())
+    if key not in _CONN_CACHE:
+        _CONN_CACHE[key] = sqlite3.connect(f"file:{key}?mode=ro", uri=True)
+    return _CONN_CACHE[key]
+
+
 def load_rows(db_path, sid):
     """从 opencode 库里取该会话的消息；自动识别 v2 / v1 表结构。"""
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    db = _db(db_path)
     tables = {r[0] for r in db.execute(
         "select name from sqlite_master where type='table'")}
     if "session_message" in tables and "session_v2" in tables:
@@ -799,7 +811,7 @@ def strip_jsonc(text):
 
 def session_provider(db_path, sid):
     """取会话记录里的模型 providerID（v1/v2 表结构都能取）。"""
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    db = _db(db_path)
     tables = {r[0] for r in db.execute("select name from sqlite_master where type='table'")}
     table = "session_v2" if "session_v2" in tables else "session"
     row = db.execute(f"select model from {table} where id=?", (sid,)).fetchone()

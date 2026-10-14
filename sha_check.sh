@@ -1,12 +1,12 @@
 #!/bin/bash
-# acp2bili 完整性自检（v5：多候选指纹版）
+# acp2bili 完整性自检（v6：修 EMFILE）
 # 逐文件 md5 + sha256 双校验；任何不一致立即退出。
 set -e
 cd "$(dirname "$0")"
 FAIL=0
 
-echo -n "bili_convert.py (52820B) md5: ";  [ "$(md5 -q bili_convert.py)" = "11e9b19b2ed3b2949fd96042f1746c4a" ] && echo OK || { echo "MISMATCH（期望 11e9b19b2ed3b2949fd96042f1746c4a）"; FAIL=1; }
-echo -n "bili_convert.py sha256: "; [ "$(shasum -a 256 bili_convert.py | cut -d" " -f1)" = "a4df11130178f5809cfb60135803a5af675a2e596725972fedd243c6410eceed" ] && echo OK || { echo "MISMATCH（期望 a4df11130178f5809cfb60135803a5af675a2e596725972fedd243c6410eceed）"; FAIL=1; }
+echo -n "bili_convert.py (53144B) md5: ";  [ "$(md5 -q bili_convert.py)" = "9ed985b421dc6342258c0ea187c05474" ] && echo OK || { echo "MISMATCH（期望 9ed985b421dc6342258c0ea187c05474）"; FAIL=1; }
+echo -n "bili_convert.py sha256: "; [ "$(shasum -a 256 bili_convert.py | cut -d" " -f1)" = "c05de6489b7c22e2f9b5f0ed7ff1327ce54d7e4bf43f4e686119ad252ddec18e" ] && echo OK || { echo "MISMATCH（期望 c05de6489b7c22e2f9b5f0ed7ff1327ce54d7e4bf43f4e686119ad252ddec18e）"; FAIL=1; }
 
 echo -n "bili_verify.py (17087B) md5: ";  [ "$(md5 -q bili_verify.py)" = "7756d567d54e8f55867b1a78f8af2c25" ] && echo OK || { echo "MISMATCH（期望 7756d567d54e8f55867b1a78f8af2c25）"; FAIL=1; }
 echo -n "bili_verify.py sha256: "; [ "$(shasum -a 256 bili_verify.py | cut -d" " -f1)" = "73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8" ] && echo OK || { echo "MISMATCH（期望 73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8）"; FAIL=1; }
