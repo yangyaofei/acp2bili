@@ -257,6 +257,149 @@ def build_cores(rows, wire="2x", fold_providers=None, rc_providers=None,
     return cores, cores_of_msg
 
 
+def cores_from_dump(dump_path, rows):
+    """测量法：从 bili 的 INCOMING 转储（宿主真实发出的请求体）直接折 core。
+
+    不猜任何序列化规则（1x/2x/catalog 全部绕开）：转储里每条消息长什么样，
+    就按 bili openaiToCore 的语义算什么 id —— 与 bili 实际看到的逐字节一致。
+    同时把每个 core 锚定回宿主消息 id（acp 块的 directMessageIds 要用）。
+
+    转储格式：`<METHOD> <url>\n<headers>\n\n<body>`（bili raw/*-INCOMING.txt）。
+    返回 (CORES, cores_of_msg, stats)，CORES 形状与 build_cores 相同。
+    """
+    raw = pathlib.Path(dump_path).read_text(encoding="utf-8")
+    head, _, body = raw.partition("\n\n")
+    if not head.strip().startswith(("POST", "GET", "PUT")):   # 已经是纯 JSON 体
+        body = raw
+    msgs = json.loads(body)["messages"]
+
+    # ---- 锚点索引：文本串 -> [msg_id]（rc 的 R/T 与 fold 的 R+T 都登记）、call_id -> msg_id ----
+    text_idx = collections.defaultdict(list)
+    tool_idx = {}
+    for mid, typ, data in rows:
+        m = json.loads(data)
+        if typ == "user":
+            if m.get("text"):
+                text_idx[m["text"]].append(mid)
+            continue
+        if typ != "assistant":
+            continue
+        content = m.get("content") or []
+        rs = "".join(p.get("text", "") for p in content
+                     if p.get("type") == "reasoning" and p.get("text"))
+        ts = "".join(p.get("text", "") for p in content
+                     if p.get("type") == "text" and p.get("text"))
+        # 每个 part 的文本单独登记（build_cores 按 part 逐条产 core，wire 上也可能逐条出现），
+        # 同时保留拼接形态（rc 的 R/T 与 fold 的 R+T）
+        for p in content:
+            if p.get("type") in ("reasoning", "text") and p.get("text"):
+                text_idx[p["text"]].append(mid)
+        for s in (rs, ts, rs + ts):
+            if s:
+                text_idx[s].append(mid)
+        for p in content:
+            if p.get("type") == "tool" and p.get("id"):
+                tool_idx[p["id"]] = mid
+
+    def scontent(c):
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "".join(p.get("text", "") for p in c
+                           if isinstance(p, dict) and p.get("type") == "text")
+        return ""
+
+    cores, cores_of_msg = [], collections.defaultdict(list)
+    clusters = collections.Counter()
+    stats = collections.Counter()
+    used = set()           # (锚点串, mid)：同一宿主消息可锚多个不同串（R/T/tool 各自一条）
+    row_order = {mid: i for i, (mid, _, _) in enumerate(rows)}
+    last = {"pos": 0}      # 顺序先验：与 bili 的 order-centric 对账同思想
+    tc_name = {}          # call_id -> 工具名（展示用；tool-result 的 seed 不带它）
+
+    def anchor(key, cands):
+        best, bestd = None, None
+        for mid in cands:
+            if (key, mid) in used:
+                continue
+            d = abs(row_order.get(mid, 0) - last["pos"])
+            if bestd is None or d < bestd:
+                best, bestd = mid, d
+        if best is None:
+            return None
+        used.add((key, best))
+        last["pos"] = row_order.get(best, last["pos"])
+        return best
+
+    def push(base, mid, role, ct, tcid, tname, text):
+        n = clusters[base]
+        clusters[base] += 1
+        cid = base if n == 0 else f"{base}_{n}"
+        cores.append((cid, mid, role, ct, tcid, tname, text))
+        if mid:
+            cores_of_msg[mid].append(cid)
+
+    lead_done = False
+    for m in msgs:
+        role = m.get("role")
+        if role in ("system", "developer") and not lead_done:
+            stats["lead_system(跳过,hoist)"] += 1
+            continue                       # 前导 system 被 bili hoist 出 fold 空间
+        lead_done = True
+        if role in ("system", "developer"):        # 中段 system → 按 user 记
+            t = scontent(m.get("content"))
+            push(derive("user", "text", t), None, "user", "text", "", None, t)
+            stats["mid_system(无锚)"] += 1
+        elif role == "user":
+            t = scontent(m.get("content"))
+            mid = anchor(t, text_idx.get(t, ())) if t else None
+            if mid is None:
+                stats["user 未锚定"] += 1
+            push(derive("user", "text", t), mid, "user", "text", "", None, t)
+        elif role == "assistant":
+            rc = m.get("reasoning_content") or ""
+            cont = scontent(m.get("content"))
+            tcs = m.get("tool_calls") or []
+            mid = None
+            for tc in tcs:                          # 优先 call_id 锚（最硬）
+                k = tc.get("id") or ""
+                if k in tool_idx:
+                    mid = tool_idx[k]
+                    last["pos"] = row_order.get(mid, last["pos"])
+                    break
+            if mid is None and rc:
+                mid = anchor(rc, text_idx.get(rc, ()))
+            if mid is None and cont:
+                mid = anchor(cont, text_idx.get(cont, ()))
+            if mid is None and (rc or cont or tcs):
+                stats["assistant 未锚定"] += 1
+            if rc:
+                push(derive("assistant", "reasoning", rc),
+                     mid, "assistant", "reasoning", "", None, rc)
+            if cont:
+                push(derive("assistant", "text", cont),
+                     mid, "assistant", "text", "", None, cont)
+            for tc in tcs:
+                fn = tc.get("function") or {}
+                args = fn.get("arguments") or ""
+                k = tc.get("id") or ""
+                tc_name[k] = fn.get("name") or ""
+                push(derive("assistant", "tool-call", args, k, fn.get("name")),
+                     mid, "assistant", "tool-call", k, fn.get("name"), args)
+        elif role == "tool":
+            t = scontent(m.get("content"))
+            tcid = m.get("tool_call_id") or ""
+            mid = tool_idx.get(tcid)
+            if mid is None:
+                stats["tool-result 未锚定"] += 1
+            # 与 build_cores/内核标定一致：tool-result 的 seed 只带 toolCallId，不带 toolName
+            push(derive("tool", "tool-result", t, tcid),
+                 mid, "tool", "tool-result", tcid, tc_name.get(tcid), t)
+        else:
+            stats[f"未知 role:{role}"] += 1
+    return cores, cores_of_msg, stats
+
+
 def load_rows(db_path, sid):
     """从 opencode 库里取该会话的消息；自动识别 v2 / v1 表结构。"""
     db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -331,12 +474,31 @@ def convert(args):
               "没有原始内容，转换无意义，跳过（不写产物）")
         return
     wire = getattr(args, "wire", "") or ("1x" if mode == "v1" else "2x")
-    print(f"内容源模式 : {mode}   → wire 规则: {wire}")
     fold_extra = [s.strip() for s in (getattr(args, "fold_providers", "") or "").split(",") if s.strip()]
     rc_force = [s.strip() for s in (getattr(args, "rc_providers", "") or "").split(",") if s.strip()]
+    dump_path = getattr(args, "dump", None)
+    if dump_path:
+        # 测量法：指纹直接来自宿主真实请求，--wire 规则整个绕开
+        cores, cores_of_msg, dstats = cores_from_dump(dump_path, rows)
+        print(f"内容源模式 : {mode} + 转储测量（{dump_path}）  [--wire 规则未参与]")
+        for k, v in sorted(dstats.items()):
+            if v:
+                print(f"   锚定统计 {k}: {v}")
+        if not getattr(args, "protocol", None) or not getattr(args, "upstream", None):
+            head = pathlib.Path(dump_path).read_text(encoding="utf-8").split("\n", 1)[0]
+            parts = head.split()
+            if len(parts) >= 2 and parts[1].startswith("http"):
+                u = urlparse(parts[1])
+                if not getattr(args, "upstream", None):
+                    args.upstream = f"{u.scheme}://{u.netloc}"
+                if not getattr(args, "protocol", None):
+                    args.protocol = "anthropic" if "/messages" in u.path else "openai"
+    else:
+        print(f"内容源模式 : {mode}   → wire 规则: {wire}")
     regime_log = {}
-    cores, cores_of_msg = build_cores(rows, wire, fold_providers=fold_extra,
-                                      rc_providers=rc_force, regime_log=regime_log)
+    if not dump_path:
+        cores, cores_of_msg = build_cores(rows, wire, fold_providers=fold_extra,
+                                          rc_providers=rc_force, regime_log=regime_log)
     if regime_log:
         print("1.x wire 形态（按 provider/model 逐条判定）:")
         for p, c in sorted(regime_log.items(),
@@ -641,6 +803,10 @@ def main():
     p.add_argument("--acp", help="acp 状态文件（不给则由 --auto 推断）")
     p.add_argument("--db", help="内容源库（不给则 <data-dir>/opencode.db）")
     p.add_argument("--acp-dir", help="acp 状态目录（不给则 <data-dir>/storage/plugin/acp）")
+    p.add_argument("--from-dump", dest="dump",
+                   help="bili 的 INCOMING 转储文件（raw/*-INCOMING.txt）：测量法，"
+                        "指纹直接按宿主真实请求计算，--wire 规则与形态表全部绕开；"
+                        "protocol/upstream 未给时自动从转储 URL 推断")
     p.add_argument("--data-dir", help="opencode 数据目录（默认 ~/.local/share/opencode 或 $XDG_DATA_HOME）")
     p.add_argument("--sid", help="会话 id；--auto 下不给且只有一个候选时自动选")
     p.add_argument("--out", help="输出目录（默认 ~/acp2bili-out；建议先输出到这里，校验通过再拷进 bili 的 sessions 目录）")

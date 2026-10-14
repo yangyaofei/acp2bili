@@ -100,6 +100,32 @@ force（--rc/--fold-providers，可写 "provider" 或 "provider/model"）
 > 遇到没测过的组合 drift 异常时：抓一次转储（`ACP_DUMP_BODY=1` 重启代理后跑一句），
 > 用 `bili_wire_diff.py --try-rules` 定形态，再用 `--fold-providers provider/model` 覆盖并重转。
 
+## 测量法（--from-dump）：不猜任何规则，直接从真实请求算指纹
+
+形态规则（上一节）本质是**预测**宿主怎么序列化，覆盖不了所有组合。终极解是**测量**：
+让宿主真发一次请求，把请求原文（bili 的 INCOMING 转储）当作指纹来源——转储里每条消息
+长什么样，就按 bili 自己的语义算什么 id，与 bili 实际看到的逐字节一致。
+
+```bash
+# 1) 抓一次转储（见下一节的正确开法），然后：
+python3 bili_convert.py --auto --sid <sid> --acp-dir ~/acp-state-quarantine \
+  --from-dump ~/.local/state/billion-context/raw/<时间戳>-<sid>-INCOMING.txt
+
+# 2) 校验同样用测量法重算（产物与校验必须同源）
+python3 bili_verify.py --acp ~/acp-state-quarantine/<sid>.json \
+  --bili <产物路径> --from-dump <同一个转储> --sid <sid>
+
+# 3) 校验器会打印「锚定统计」：未锚定 = 转储里有、库里对不上宿主消息的条数，
+#    新增对话（转储抓取前的正常使用）属于此类，落在尾段，属预期。
+```
+
+- `--from-dump` 与形态规则互斥：给了转储就完全不用 1x/2x/catalog。
+- protocol/upstream 不给时自动从转储首行 URL 推断（`/messages` → anthropic，否则 openai）。
+- 顺序先验：锚定重复文本时取**离当前位置最近**的候选（与 bili 的 order-centric 对账同思想），
+  实测能把块级覆盖对到与 acp 完全一致（B2）。
+- 适用场景：预测法重转后 drift 仍大的会话；没测过的 provider/model 组合；升级/换配置后。
+
+
 ## 转储开关（ACP_DUMP_BODY）：用完必关
 
 抓真实请求转储用的代理是**手动带环境变量**起的，跟平时自动拉起的不是同一个——**它会一直把

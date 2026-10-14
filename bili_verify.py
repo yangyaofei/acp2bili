@@ -41,7 +41,7 @@ import sys
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from bili_convert import build_cores, load_rows  # noqa: E402
+from bili_convert import build_cores, load_rows, cores_from_dump  # noqa: E402
 
 REF_RE = re.compile(r"^m\d{5}$")
 BLOCK_RE = re.compile(r"^b[1-9]\d*$")
@@ -71,6 +71,8 @@ def main():
     ap.add_argument("--out", default="", help="把报告同时写到该文件")
     ap.add_argument("--wire", choices=["", "1x", "2x"], default="",
                     help="assistant 序列化规则（默认按库表结构自动选：v1→1x，v2→2x）")
+    ap.add_argument("--from-dump", dest="dump", default="",
+                    help="bili 的 INCOMING 转储：B 组改用测量法重算（与 --from-dump 转换的产物配套）")
     args = ap.parse_args()
 
     acp = json.load(open(args.acp))
@@ -229,11 +231,19 @@ def main():
             print("  v1 模式：assistant 的 wire 形态**逐条按 provider/model 判定**（fold=reasoning 并进 content；"
                   "rc=reasoning 走 reasoning_content；表见 bili_convert.py 的 MEASURED_FORMS / classify_form）")
         wire = args.wire or ("1x" if mode == "v1" else "2x")
-        print(f"  (wire 规则: {wire})")
         regime_log = {}
-        cores, cores_of_msg = build_cores(rows, wire, regime_log=regime_log)
-        for prov, c in sorted(regime_log.items(), key=lambda kv: -(kv[1]["fold"] + kv[1]["rc"])):
-            print(f"    {prov:<44} fold={c['fold']:<5} rc={c['rc']:<5}")
+        if args.dump:
+            print(f"  (测量法：转储 {args.dump}；--wire 规则未参与)")
+            cores, cores_of_msg, dstats = cores_from_dump(args.dump, rows)
+            for k, v in sorted(dstats.items()):
+                if v:
+                    print(f"    锚定统计 {k}: {v}")
+        else:
+            print(f"  (wire 规则: {wire})")
+            cores, cores_of_msg = build_cores(rows, wire, regime_log=regime_log)
+        if not args.dump:
+            for prov, c in sorted(regime_log.items(), key=lambda kv: -(kv[1]["fold"] + kv[1]["rc"])):
+                print(f"    {prov:<44} fold={c['fold']:<5} rc={c['rc']:<5}")
         from bili_convert import form_contradictions
         for prov, model, got, want in form_contradictions():
             print(f"    ⚠ {prov}/{model}: 实测 {got} / catalog {want}（按实测走；catalog 仅填空）")

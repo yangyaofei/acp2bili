@@ -1,31 +1,102 @@
 #!/bin/bash
-# 校验 acp2bili 各脚本是否是当前版本（在脚本所在目录运行）。用法：bash sha_check.sh
-set -u
-cd "$(dirname "$0")" || exit 1
+# 校验本目录核心文件与发布版一致（bash sha_check.sh）
+fail=0
 
-expect() {   # expect <文件> <md5> <sha256> <字节数>
-  f=$1; want_md5=$2; want_sha=$3; want_size=$4
-  if [ ! -f "$f" ]; then
-    printf '%-20s [缺失] 这个文件不在当前目录\n' "$f"; return
-  fi
-  md5=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d' ' -f1)
-  sha=$(shasum -a 256 "$f" | cut -d' ' -f1)
-  size=$(wc -c < "$f" | tr -d ' ')
-  if [ "$md5" = "$want_md5" ] && [ "$sha" = "$want_sha" ]; then
-    printf '%-20s [一致]  md5=%s  sha256=%s  %sB\n' "$f" "$md5" "$sha" "$size"
-  else
-    printf '%-20s [不一致] —— 不是当前版本（git pull 或重新下载）\n' "$f"
-    printf '        本机 md5=%s sha256=%s 字节=%s\n' "$md5" "$sha" "$size"
-    printf '        期望 md5=%s sha256=%s 字节=%s\n' "$want_md5" "$want_sha" "$want_size"
-  fi
-}
+f="bili_convert.py"
+want_md5="8a9825ea07149f58ced92c8e9ab997c9"
+want_sha256="923c4b4ab7ef923d6321b159b42089448467ff0f5018da12aa6d7c4264a63de4"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
 
-# v4.3（2026-10-15）：verify_all 的 --acp 增加 --acp-dir 等价别名（转换器叫 --acp-dir，历史叫 --acp，两个都收）
-expect bili_convert.py     58496d1ec57c6bea9a0b80c959f6ce9e 0fc558a475b39f540c7ed077df4f831353790c62220b403d0c6b6b9d6340e920 38350
-expect bili_verify.py      fca07b9d4f4c7ac1012cf08d3362ec4e 820a9fcdf76f2c17245e23d0069de85a8b8220dfdd94d990977afdead13d29ef 16071
-expect bili_verify_all.py  7a35e0ea3d1975bbc86aad41d7cc213b c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5 8568
-expect bili_wire_diff.py   fb54a913e4eab5c02cdfeadb3d7d75ea b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16 12391
-expect probe_residual.py   ae5704282a4cd9943f6055644384747f 1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749 3986
+f="bili_verify.py"
+want_md5="6445c60c9bec985748eea39898894a35"
+want_sha256="13c53cb791f136db3f59de3f8df196d395b0907c59211fa01f0d0210e8cb83ef"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
 
-echo
-echo "全部 [一致] → 直接用；任何 [不一致] → git pull（或重新下载）后再跑"
+f="bili_verify_all.py"
+want_md5="7a35e0ea3d1975bbc86aad41d7cc213b"
+want_sha256="c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
+
+f="bili_wire_diff.py"
+want_md5="fb54a913e4eab5c02cdfeadb3d7d75ea"
+want_sha256="b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
+
+f="probe_residual.py"
+want_md5="ae5704282a4cd9943f6055644384747f"
+want_sha256="1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
+
+f="backup.sh"
+want_md5="def948379b2d0cd26a14b1726df4a799"
+want_sha256="aeadd1ca43003aa354f2718365a63b96dc9ceed392c445bc7f848d36345b1154"
+got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
+if [ "$got" = "$want_md5" ]; then
+  echo "OK   $f  md5=$got"
+else
+  echo "FAIL $f  md5=$got != $want_md5"; fail=1
+fi
+got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
+if [ "$got2" = "$want_sha256" ]; then
+  echo "OK   $f  sha256=$got2"
+else
+  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
+fi
+
+[ "$fail" = 0 ] && echo "== 全部一致 ==" || echo "== 有文件不一致 =="
+exit $fail
