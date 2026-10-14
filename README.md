@@ -27,6 +27,7 @@
 | `bili_verify_all.py` | 批量校验 + `--install` 只装全 PASS 的产物到 bili sessions 目录（同名先备份 `.bak`） |
 | `bili_wire_diff.py` | 取证：把真实请求转储折成 core，与我们的账本逐位比，按类（角色×内容类型）给差异样本；`--try-rules` 可对比多种形态规则 |
 | `probe_residual.py` | 残差取证：对对不上的 core 打印源消息形状（parts/status/provider） |
+| `backup.sh` | 一站式备份到 `~/OpenCode_bak/<时间戳>_<主机>/`：opencode 库三件套+配置+acp 状态+bili 会话+迁移产物；`--full` 加整个 storage 与 cache。还原步骤见脚本头注释与 MANIFEST.txt |
 | `sha_check.sh` | 核对本机脚本是否当前版本（md5+sha256+字节） |
 
 ## 快速开始（在跑过 opencode-acp 的 opencode v1 机器上）
