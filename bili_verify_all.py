@@ -42,7 +42,9 @@ def find_out(root: pathlib.Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=DEFAULT_OUT, help="转换产物目录（默认 ~/acp2bili-out）")
-    ap.add_argument("--acp", default=DEFAULT_ACPDIR, help="acp 状态目录")
+    # --acp 与 --acp-dir 等价：转换器叫 --acp-dir，这里历史上叫 --acp，两个都收
+    ap.add_argument("--acp", "--acp-dir", dest="acp", default=DEFAULT_ACPDIR,
+                    help="acp 状态目录（--acp 与 --acp-dir 等价）")
     ap.add_argument("--db", default=DEFAULT_DB, help="opencode 库（B 组内容检查要用）")
     ap.add_argument("--wire", choices=["", "1x", "2x"], default="",
                     help="wire 规则（默认按库结构自动：v1→1x / v2→2x）")

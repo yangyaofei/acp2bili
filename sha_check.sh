@@ -20,10 +20,10 @@ expect() {   # expect <文件> <md5> <sha256> <字节数>
   fi
 }
 
-# v4.1（2026-10-15）：verify_all 增加同会话产物去重（--prune 可删陈旧副本）
+# v4.3（2026-10-15）：verify_all 的 --acp 增加 --acp-dir 等价别名（转换器叫 --acp-dir，历史叫 --acp，两个都收）
 expect bili_convert.py     58496d1ec57c6bea9a0b80c959f6ce9e 0fc558a475b39f540c7ed077df4f831353790c62220b403d0c6b6b9d6340e920 38350
 expect bili_verify.py      fca07b9d4f4c7ac1012cf08d3362ec4e 820a9fcdf76f2c17245e23d0069de85a8b8220dfdd94d990977afdead13d29ef 16071
-expect bili_verify_all.py  819c9c0a598906d69c1fa47d32938635 cd44aac72c2137e8e445c441cff45465ecf00fd39cd3ea97bcc3289b73c2bb58 8391
+expect bili_verify_all.py  7a35e0ea3d1975bbc86aad41d7cc213b c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5 8568
 expect bili_wire_diff.py   fb54a913e4eab5c02cdfeadb3d7d75ea b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16 12391
 expect probe_residual.py   ae5704282a4cd9943f6055644384747f 1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749 3986
 

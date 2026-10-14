@@ -41,6 +41,7 @@ python3 bili_convert.py --auto --all --acp-dir ~/acp-state-quarantine
 
 # ② 校验 + 安装（只装全 PASS 的）
 python3 bili_verify_all.py --install --acp ~/acp-state-quarantine --report ~/verify-report.txt
+# （校验器的 --acp 与 --acp-dir 等价，写哪个都行）
 
 # ③ 把默认目录里剩余的 acp 状态隔离（关键：不隔离会走 legacy 旁路，bili 不用我们的产物）
 #    （用 find 而不是 shell 通配：zsh 下目录为空会报 "no matches found"，find 两种 shell 都安全）
