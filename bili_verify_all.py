@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""批量校验 acp2bili 的转换产物（可选：通过的直接装进 bili 的 sessions 目录）。
+
+对每个产物调一次 `bili_verify.py`（A 组结构检查 + B 组内容检查），把结果汇成一张表；
+只有全部 PASS 的才会在 --install 时被装进 bili 目录。
+
+用法：
+  python3 bili_verify_all.py                       # 校验 ~/acp2bili-out 下全部产物
+  python3 bili_verify_all.py --limit 5             # 只校验前 5 个（冒烟）
+  python3 bili_verify_all.py --install             # 校验通过的直接安装
+  python3 bili_verify_all.py --report ~/verify-report.txt
+  python3 bili_verify_all.py --acp <acp目录> --db <opencode.db> --out <产物目录> --wire 1x
+                                                  # 手工指定（不在默认位置时）
+  # 若转换时用了自定义 provider 规则，这里要带同样的 --fold-providers/--rc-providers
+
+退出码：0 = 全部通过 / 1 = 有失败 / 2 = 没有找到产物。
+"""
+import argparse, json, os, pathlib, shutil, subprocess, sys, time
+
+HERE = pathlib.Path(__file__).resolve().parent
+DEFAULT_OUT = "~/acp2bili-out"
+DEFAULT_ACPDIR = "~/.local/share/opencode/storage/plugin/acp"
+DEFAULT_DB = "~/.local/share/opencode/opencode.db"
+BILI_SESSIONS = "~/.local/share/billion-context/sessions"
+
+
+def find_out(root: pathlib.Path):
+    """产物：<out>/<protocol>/<host>_<hash>.json（也接受扁平放置）。"""
+    out = []
+    for p in sorted(root.rglob("*.json")):
+        if p.name.endswith(".bak") or ".content-store" in p.name or p.name.startswith("."):
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(d, dict) and "payload" in d and "id" in d:
+            out.append((p, d))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=DEFAULT_OUT, help="转换产物目录（默认 ~/acp2bili-out）")
+    ap.add_argument("--acp", default=DEFAULT_ACPDIR, help="acp 状态目录")
+    ap.add_argument("--db", default=DEFAULT_DB, help="opencode 库（B 组内容检查要用）")
+    ap.add_argument("--wire", choices=["", "1x", "2x"], default="",
+                    help="wire 规则（默认按库结构自动：v1→1x / v2→2x）")
+    ap.add_argument("--fold-providers", default="", help="转换时若自定义过 provider 规则，需两边同步改常量（见下方提示）")
+    ap.add_argument("--rc-providers", default="", help="同上")
+    ap.add_argument("--limit", type=int, default=0, help="只校验前 N 个")
+    ap.add_argument("--install", action="store_true",
+                    help="把校验通过（全 PASS）的产物装进 ~/.local/share/billion-context/sessions/")
+    ap.add_argument("--report", default="", help="把详细报告写到该文件")
+    args = ap.parse_args()
+
+    out_root = pathlib.Path(os.path.expanduser(args.out))
+    acpdir = pathlib.Path(os.path.expanduser(args.acp))
+    db = os.path.expanduser(args.db)
+    items = find_out(out_root)
+    if args.limit:
+        items = items[:args.limit]
+    if not items:
+        print(f"{out_root} 下没有找到转换产物。先跑 bili_convert.py")
+        return 2
+
+    print(f"产物目录 : {out_root}   共 {len(items)} 个")
+    print(f"acp 目录 : {acpdir}")
+    print(f"内容源库 : {db}   {'(存在)' if os.path.exists(db) else '(不存在！B 组会跳过)'}")
+    print(f"安装     : {'开' if args.install else '关'}")
+    print("-" * 78)
+
+    ok, bad, skipped, installed, lines_all = [], [], [], 0, []
+    t0 = time.time()
+    for i, (path, d) in enumerate(items, 1):
+        sid = d.get("id") or ""
+        acp_file = acpdir / f"{sid}.json"
+        if not acp_file.exists():
+            skipped.append((sid, str(path)))
+            print(f"[{i:>3}/{len(items)}] 跳过 {sid[:34]:<34} 找不到 acp 状态 {acp_file.name}")
+            continue
+        cmd = [sys.executable, str(HERE / "bili_verify.py"),
+               "--acp", str(acp_file), "--bili", str(path), "--sid", sid, "--db", db]
+        if args.wire:
+            cmd += ["--wire", args.wire]
+        if args.fold_providers or args.rc_providers:
+            pass  # bili_verify.py 不接受这两个参数；自定义 provider 规则要两边同步改常量
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        lines_all.append(f"===== {sid} ({path}) =====\n{out}\n")
+        passed = ("校验结论: 全部通过" in out)
+        blocks = (d.get("payload", {}).get("state", {}) or {}).get("blocks") or []
+        nblocks = len(blocks) if isinstance(blocks, list) else len(blocks)
+        if passed:
+            ok.append(sid)
+            print(f"[{i:>3}/{len(items)}] PASS {sid[:34]:<34} blocks={nblocks}")
+            if args.install:
+                proto = ((d.get("payload", {}).get("meta") or {}).get("protocol")) or "openai"
+                dst_dir = pathlib.Path(os.path.expanduser(BILI_SESSIONS)) / proto
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                dst = dst_dir / path.name
+                if dst.exists():
+                    shutil.copy2(dst, dst.with_suffix(f".json.bak-{time.strftime('%Y%m%d-%H%M%S')}"))
+                shutil.copy2(path, dst)
+                installed += 1
+                print(f"         ↳ 已安装 {dst}")
+        else:
+            bad.append((sid, str(path)))
+            print(f"[{i:>3}/{len(items)}] FAIL {sid[:34]:<34} blocks={nblocks}")
+            for ln in out.splitlines():
+                if "[FAIL]" in ln or "校验结论" in ln:
+                    print(f"         {ln.strip()}")
+
+    print("-" * 78)
+    print(f"合计 {len(items)} 个：PASS {len(ok)} / FAIL {len(bad)} / 跳过 {len(skipped)}"
+          f"   用时 {time.time() - t0:.1f}s")
+    if installed:
+        print(f"已安装 {installed} 个到 {os.path.expanduser(BILI_SESSIONS)}/")
+    if bad:
+        print("\n失败的会话（详细见 --report）：")
+        for sid, p in bad:
+            print(f"  {sid}  {p}")
+    if skipped:
+        print("\n跳过的会话（没有 acp 状态，可能是没压过的会话）：")
+        for sid, p in skipped[:20]:
+            print(f"  {sid}")
+        if len(skipped) > 20:
+            print(f"  … 另有 {len(skipped) - 20} 个")
+    if args.report:
+        pathlib.Path(os.path.expanduser(args.report)).write_text("\n".join(lines_all), encoding="utf-8")
+        print(f"\n详细报告：{os.path.expanduser(args.report)}")
+    print("\n=== 批量结论: " + ("全部通过 ✓" if not bad else f"{len(bad)} 个失败 ✗") + " ===")
+    return 0 if not bad else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
