@@ -257,6 +257,111 @@ def build_cores(rows, wire="2x", fold_providers=None, rc_providers=None,
     return cores, cores_of_msg
 
 
+def build_candidates(rows):
+    """多候选指纹（排列组合法）：对每条消息把**所有可能 wire 形态**的指纹都产出来。
+
+    背景（2026-10-15 定案）：wire 上的内容哈希（h_）由「拼法」决定，而拼法的
+    一个条件（catalog 的 interleaved 开关）既不随消息存储、也不必然等于磁盘上
+    最新的元数据（opencode-go 实证：buraunkan 缓存已刷新成 rc、宿主实际仍发
+    fold，旗舰 drift 986）。与其猜哪种形态会出现，不如把候选全部注册进账本：
+      - 宿主实际发出的那个候选 → 命中 → 折叠生效
+      - 永远发不出来的候选 → 留在账本里当死账（与宿主 compaction 前缀同类
+        的良性 missing，bili 已有处理路径，见 #1921）
+    候选维度（每条消息最多 4 个指纹，多数只有 1 个）：
+      1. reasoning 摆放：fold（拼进 content，1 条）/ 1x-rc（逐 part 各 1 条）/ 2x-rc（合并 1 条）
+      2. 错误工具结果包裹：v1 纯文本/占位串 / v2 JSON 包裹
+    同一消息内相同 (role, contentType, toolCallId, toolName, text) 去重——
+    避免给同一指纹造出假的 _N 重复后缀。
+
+    返回 (CORES, cores_of_msg)，形状与 build_cores 相同。
+    """
+    cores = []
+    cores_of_msg = collections.defaultdict(list)
+    clusters = collections.Counter()
+
+    def push(base, mid, role, ct, tcid, tname, text):
+        n = clusters[base]
+        clusters[base] += 1
+        cid = base if n == 0 else f"{base}_{n}"
+        cores.append((cid, mid, role, ct, tcid, tname, text))
+        cores_of_msg[mid].append(cid)
+
+    for mid, typ, data in rows:
+        m = json.loads(data)
+        if typ == "user":
+            push(derive("user", "text", m.get("text", "")),
+                 mid, "user", "text", "", None, m.get("text", ""))
+            continue
+        if typ != "assistant":
+            continue
+        content = m.get("content") or []
+        r_parts = [p.get("text", "") for p in content
+                   if p.get("type") == "reasoning" and p.get("text")]
+        t_parts = [p.get("text", "") for p in content
+                   if p.get("type") == "text" and p.get("text")]
+        reasoning = "".join(r_parts)
+        text = "".join(t_parts)
+        tools = [p for p in content if p.get("type") == "tool"]
+        if not reasoning and not text and not tools:
+            continue                     # 完全空的 assistant：任何形态都不产生 core
+
+        seen = set()                     # 同一消息内去重
+
+        def push1(role, ct, tcid, tname, txt):
+            k = (role, ct, tcid or "", tname or "", txt)
+            if k in seen:
+                return
+            seen.add(k)
+            # seed 参数与内核标定严格一致：
+            #   tool-call    → derive(role, ct, text, toolCallId, toolName)  5 参
+            #   tool-result  → derive(role, ct, text, toolCallId)            4 参（不带 toolName）
+            #   其余         → derive(role, ct, text)                        3 参
+            if ct == "tool-call":
+                base = derive(role, ct, txt, tcid or "", tname)
+            elif ct == "tool-result":
+                base = derive(role, ct, txt, tcid or "")
+            else:
+                base = derive(role, ct, txt)
+            push(base, mid, role, ct, tcid, tname, txt)
+
+        # 候选 1：fold —— 1.x 无开关组合，reasoning 直接拼进 content（实测分隔符=空串）
+        pooled = reasoning + text
+        if pooled:
+            push1("assistant", "text", "", None, pooled)
+        # 候选 2：1x-rc —— reasoning 逐 part 各一条（1.x 实测：多 part 各算一条）
+        for rp in r_parts:
+            push1("assistant", "reasoning", "", None, rp)
+        # 候选 3：2x-rc —— reasoning 合并一条（单 part 时与候选 2 天然去重）
+        if reasoning:
+            push1("assistant", "reasoning", "", None, reasoning)
+        if text:
+            push1("assistant", "text", "", None, text)
+        # 工具调用：各形态一致，单一指纹
+        for x in tools:
+            st = x.get("state") or {}
+            args = json.dumps(st.get("input") or {}, separators=(",", ":"), ensure_ascii=False)
+            push1("assistant", "tool-call", x.get("id", ""), x.get("name"), args)
+        # 工具结果：completed 单一指纹；非 completed 三候选
+        #   v1-错误文本 / v1-占位串（无文本、被中断、未跑完）/ v2-JSON 包裹
+        for x in tools:
+            st = x.get("state") or {}
+            parts = st.get("content") or []
+            raw = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+            if st.get("status") != "completed":
+                err = st.get("error")
+                msg = err.get("message") if isinstance(err, dict) else (err if isinstance(err, str) else "")
+                push1("tool", "tool-result", x.get("id", ""), x.get("name"),
+                      msg or "[Tool execution was interrupted]")
+                if raw and raw != msg:
+                    push1("tool", "tool-result", x.get("id", ""), x.get("name"), raw)
+                push1("tool", "tool-result", x.get("id", ""), x.get("name"),
+                      json.dumps({"error": st.get("error"), "content": parts},
+                                 separators=(",", ":"), ensure_ascii=False))
+            else:
+                push1("tool", "tool-result", x.get("id", ""), x.get("name"), raw)
+    return cores, cores_of_msg
+
+
 def cores_from_dump(dump_path, rows):
     """测量法：从 bili 的 INCOMING 转储（宿主真实发出的请求体）直接折 core。
 
@@ -477,8 +582,10 @@ def convert(args):
     fold_extra = [s.strip() for s in (getattr(args, "fold_providers", "") or "").split(",") if s.strip()]
     rc_force = [s.strip() for s in (getattr(args, "rc_providers", "") or "").split(",") if s.strip()]
     dump_path = getattr(args, "dump", None)
+    method = "predict"
     if dump_path:
         # 测量法：指纹直接来自宿主真实请求，--wire 规则整个绕开
+        method = "measure"
         cores, cores_of_msg, dstats = cores_from_dump(dump_path, rows)
         print(f"内容源模式 : {mode} + 转储测量（{dump_path}）  [--wire 规则未参与]")
         for k, v in sorted(dstats.items()):
@@ -494,11 +601,16 @@ def convert(args):
                 if not getattr(args, "protocol", None):
                     args.protocol = "anthropic" if "/messages" in u.path else "openai"
     else:
-        print(f"内容源模式 : {mode}   → wire 规则: {wire}")
-    regime_log = {}
-    if not dump_path:
-        cores, cores_of_msg = build_cores(rows, wire, fold_providers=fold_extra,
-                                          rc_providers=rc_force, regime_log=regime_log)
+        regime_log = {}
+        if getattr(args, "candidates", True):
+            # 多候选指纹：所有可能的 wire 形态全注册，不再猜 fold/rc
+            method = "candidates-v1"
+            cores, cores_of_msg = build_candidates(rows)
+            print(f"内容源模式 : {mode}   → 多候选指纹（fold/1x-rc/2x-rc + 错误双包裹全注册；--wire 规则未参与）")
+        else:
+            print(f"内容源模式 : {mode}   → wire 规则: {wire}")
+            cores, cores_of_msg = build_cores(rows, wire, fold_providers=fold_extra,
+                                              rc_providers=rc_force, regime_log=regime_log)
     if regime_log:
         print("1.x wire 形态（按 provider/model 逐条判定）:")
         for p, c in sorted(regime_log.items(),
@@ -602,7 +714,7 @@ def convert(args):
                   "compressCreditTokens": 0},
         "messages": messages,
         "messagesFolded": True,
-        "metadata": {},
+        "metadata": {"conversion": method},
         "state": {
             "blocks": blocks,
             "messageRefs": {"byRaw": ref_of_core, "byRef": core_of_ref},
@@ -824,6 +936,12 @@ def main():
     p.add_argument("--flat", action="store_true",
                    help="输出扁平名 <sha256(sid)[:24]>.json（不含 host 标签）。"
                         "bili 的 loadAll/loadSync 明确接受这种旧式扁平名，因此完全不涉及上游语义")
+    p.add_argument("--candidates", dest="candidates", action="store_true", default=True,
+                   help="多候选指纹（默认开）：每条消息注册所有可能的 wire 形态"
+                        "（fold / 1x-rc / 2x-rc + 错误工具结果双包裹），catalog 怎么翻都有候选命中；"
+                        "未命中的候选留在账本里当良性死账（与宿主 compaction 前缀同类）")
+    p.add_argument("--no-candidates", dest="candidates", action="store_false",
+                   help="退回单一预测形态（按 --wire/形态表猜一种；仅用于对照实验）")
     p.add_argument("--manifest", default="", help="可选：写出 core↔消息 映射清单")
     args = p.parse_args()
 
@@ -893,7 +1011,7 @@ def main():
         print(f"  provider : {provider or '(未知)'}  →  protocol={protocol}  upstream={up or '(未推断出)'}{note}")
         ns = argparse.Namespace(acp=acp_path, db=db, sid=sid, out=out, protocol=protocol,
                                 upstream=up or "", title=args.title, manifest=args.manifest,
-                                flat=flat, wire=args.wire)
+                                flat=flat, wire=args.wire, candidates=args.candidates)
         try:
             convert(ns)
             ok += 1

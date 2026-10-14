@@ -1,102 +1,26 @@
 #!/bin/bash
-# 校验本目录核心文件与发布版一致（bash sha_check.sh）
-fail=0
+# acp2bili 完整性自检（v5：多候选指纹版）
+# 逐文件 md5 + sha256 双校验；任何不一致立即退出。
+set -e
+cd "$(dirname "$0")"
+FAIL=0
 
-f="bili_convert.py"
-want_md5="8a9825ea07149f58ced92c8e9ab997c9"
-want_sha256="923c4b4ab7ef923d6321b159b42089448467ff0f5018da12aa6d7c4264a63de4"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "bili_convert.py (52820B) md5: ";  [ "$(md5 -q bili_convert.py)" = "11e9b19b2ed3b2949fd96042f1746c4a" ] && echo OK || { echo "MISMATCH（期望 11e9b19b2ed3b2949fd96042f1746c4a）"; FAIL=1; }
+echo -n "bili_convert.py sha256: "; [ "$(shasum -a 256 bili_convert.py | cut -d" " -f1)" = "a4df11130178f5809cfb60135803a5af675a2e596725972fedd243c6410eceed" ] && echo OK || { echo "MISMATCH（期望 a4df11130178f5809cfb60135803a5af675a2e596725972fedd243c6410eceed）"; FAIL=1; }
 
-f="bili_verify.py"
-want_md5="6445c60c9bec985748eea39898894a35"
-want_sha256="13c53cb791f136db3f59de3f8df196d395b0907c59211fa01f0d0210e8cb83ef"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "bili_verify.py (17087B) md5: ";  [ "$(md5 -q bili_verify.py)" = "7756d567d54e8f55867b1a78f8af2c25" ] && echo OK || { echo "MISMATCH（期望 7756d567d54e8f55867b1a78f8af2c25）"; FAIL=1; }
+echo -n "bili_verify.py sha256: "; [ "$(shasum -a 256 bili_verify.py | cut -d" " -f1)" = "73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8" ] && echo OK || { echo "MISMATCH（期望 73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8）"; FAIL=1; }
 
-f="bili_verify_all.py"
-want_md5="7a35e0ea3d1975bbc86aad41d7cc213b"
-want_sha256="c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "bili_verify_all.py (8568B) md5: ";  [ "$(md5 -q bili_verify_all.py)" = "7a35e0ea3d1975bbc86aad41d7cc213b" ] && echo OK || { echo "MISMATCH（期望 7a35e0ea3d1975bbc86aad41d7cc213b）"; FAIL=1; }
+echo -n "bili_verify_all.py sha256: "; [ "$(shasum -a 256 bili_verify_all.py | cut -d" " -f1)" = "c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5" ] && echo OK || { echo "MISMATCH（期望 c6cb115775ceccc93713424855caee6cf589a8fb3ff8b9cdd60b313361ad6dc5）"; FAIL=1; }
 
-f="bili_wire_diff.py"
-want_md5="fb54a913e4eab5c02cdfeadb3d7d75ea"
-want_sha256="b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "bili_wire_diff.py (12391B) md5: ";  [ "$(md5 -q bili_wire_diff.py)" = "fb54a913e4eab5c02cdfeadb3d7d75ea" ] && echo OK || { echo "MISMATCH（期望 fb54a913e4eab5c02cdfeadb3d7d75ea）"; FAIL=1; }
+echo -n "bili_wire_diff.py sha256: "; [ "$(shasum -a 256 bili_wire_diff.py | cut -d" " -f1)" = "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16" ] && echo OK || { echo "MISMATCH（期望 b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16）"; FAIL=1; }
 
-f="probe_residual.py"
-want_md5="ae5704282a4cd9943f6055644384747f"
-want_sha256="1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "probe_residual.py (3986B) md5: ";  [ "$(md5 -q probe_residual.py)" = "ae5704282a4cd9943f6055644384747f" ] && echo OK || { echo "MISMATCH（期望 ae5704282a4cd9943f6055644384747f）"; FAIL=1; }
+echo -n "probe_residual.py sha256: "; [ "$(shasum -a 256 probe_residual.py | cut -d" " -f1)" = "1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749" ] && echo OK || { echo "MISMATCH（期望 1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749）"; FAIL=1; }
 
-f="backup.sh"
-want_md5="def948379b2d0cd26a14b1726df4a799"
-want_sha256="aeadd1ca43003aa354f2718365a63b96dc9ceed392c445bc7f848d36345b1154"
-got=$(md5 -q "$f" 2>/dev/null || md5sum "$f" | cut -d" " -f1)
-if [ "$got" = "$want_md5" ]; then
-  echo "OK   $f  md5=$got"
-else
-  echo "FAIL $f  md5=$got != $want_md5"; fail=1
-fi
-got2=$(shasum -a 256 "$f" 2>/dev/null | cut -d" " -f1)
-if [ "$got2" = "$want_sha256" ]; then
-  echo "OK   $f  sha256=$got2"
-else
-  echo "FAIL $f  sha256=$got2 != $want_sha256"; fail=1
-fi
+echo -n "backup.sh (4675B) md5: ";  [ "$(md5 -q backup.sh)" = "def948379b2d0cd26a14b1726df4a799" ] && echo OK || { echo "MISMATCH（期望 def948379b2d0cd26a14b1726df4a799）"; FAIL=1; }
+echo -n "backup.sh sha256: "; [ "$(shasum -a 256 backup.sh | cut -d" " -f1)" = "aeadd1ca43003aa354f2718365a63b96dc9ceed392c445bc7f848d36345b1154" ] && echo OK || { echo "MISMATCH（期望 aeadd1ca43003aa354f2718365a63b96dc9ceed392c445bc7f848d36345b1154）"; FAIL=1; }
 
-[ "$fail" = 0 ] && echo "== 全部一致 ==" || echo "== 有文件不一致 =="
-exit $fail
+if [ "$FAIL" = 0 ]; then echo "全部一致 ✓"; else echo "存在不一致 ✗ —— 别跑，先重新 git pull / 重传"; exit 1; fi

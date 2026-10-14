@@ -41,7 +41,7 @@ import sys
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from bili_convert import build_cores, load_rows, cores_from_dump  # noqa: E402
+from bili_convert import build_cores, build_candidates, load_rows, cores_from_dump  # noqa: E402
 
 REF_RE = re.compile(r"^m\d{5}$")
 BLOCK_RE = re.compile(r"^b[1-9]\d*$")
@@ -227,10 +227,11 @@ def main():
     if args.db:
         print("\nB. 内容级检查（用内容源把 core 重算一遍）")
         rows, mode = load_rows(args.db, sid)
-        if mode == "v1":
+        if mode == "v1" and not args.dump and (payload.get("metadata") or {}).get("conversion") != "candidates-v1":
             print("  v1 模式：assistant 的 wire 形态**逐条按 provider/model 判定**（fold=reasoning 并进 content；"
                   "rc=reasoning 走 reasoning_content；表见 bili_convert.py 的 MEASURED_FORMS / classify_form）")
         wire = args.wire or ("1x" if mode == "v1" else "2x")
+        conv_method = (payload.get("metadata") or {}).get("conversion", "predict")
         regime_log = {}
         if args.dump:
             print(f"  (测量法：转储 {args.dump}；--wire 规则未参与)")
@@ -238,15 +239,18 @@ def main():
             for k, v in sorted(dstats.items()):
                 if v:
                     print(f"    锚定统计 {k}: {v}")
+        elif conv_method == "candidates-v1":
+            print("  (多候选指纹：fold / 1x-rc / 2x-rc + 错误工具结果双包裹，全形态重算)")
+            cores, cores_of_msg = build_candidates(rows)
         else:
             print(f"  (wire 规则: {wire})")
             cores, cores_of_msg = build_cores(rows, wire, regime_log=regime_log)
-        if not args.dump:
+        if not args.dump and conv_method != "candidates-v1":
             for prov, c in sorted(regime_log.items(), key=lambda kv: -(kv[1]["fold"] + kv[1]["rc"])):
                 print(f"    {prov:<44} fold={c['fold']:<5} rc={c['rc']:<5}")
-        from bili_convert import form_contradictions
-        for prov, model, got, want in form_contradictions():
-            print(f"    ⚠ {prov}/{model}: 实测 {got} / catalog {want}（按实测走；catalog 仅填空）")
+            from bili_convert import form_contradictions
+            for prov, model, got, want in form_contradictions():
+                print(f"    ⚠ {prov}/{model}: 实测 {got} / catalog {want}（按实测走；catalog 仅填空）")
         core_to_msg = {c[0]: c[1] for c in cores}
         ordered = [c[0] for c in cores]
         ref_in_order = [by_ref[r] for r in sorted(by_ref, key=lambda r: int(r[1:]))]
