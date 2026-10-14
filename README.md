@@ -43,8 +43,9 @@ python3 bili_convert.py --auto --all --acp-dir ~/acp-state-quarantine
 python3 bili_verify_all.py --install --acp ~/acp-state-quarantine --report ~/verify-report.txt
 
 # ③ 把默认目录里剩余的 acp 状态隔离（关键：不隔离会走 legacy 旁路，bili 不用我们的产物）
+#    （用 find 而不是 shell 通配：zsh 下目录为空会报 "no matches found"，find 两种 shell 都安全）
 mkdir -p ~/acp-state-quarantine
-cp -n ~/.local/share/opencode/storage/plugin/acp/*.json ~/acp-state-quarantine/ 2>/dev/null
+find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' -exec cp -n {} ~/acp-state-quarantine/ \; 2>/dev/null
 python3 - <<'PY'
 import shutil, pathlib, os
 bili = pathlib.Path.home()/".local/share/billion-context/sessions"
@@ -57,8 +58,9 @@ for f in src.glob("ses_*.json"):
 PY
 
 # ④ 重启 bili 代理（精确杀 18787/8787 的监听进程，让新产物生效）
-lsof -nP -iTCP:18787 -sTCP:LISTEN -t | xargs -r kill
-lsof -nP -iTCP:8787  -sTCP:LISTEN -t | xargs -r kill
+#    （while-read 写法 bash/zsh 通用；xargs -r 是 GNU 专用，macOS 自带的 xargs 不认）
+lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
+lsof -nP -iTCP:8787  -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
 
 # ⑤ 抽跑验收：挑最大的会话发一句
 cd <该会话的项目目录>
@@ -96,6 +98,29 @@ force（--rc/--fold-providers，可写 "provider" 或 "provider/model"）
 > 但宿主真实 wire 仍发 fold（旗舰 drift 1→986）；宿主对自定义 provider 不跟该缓存走。
 > 遇到没测过的组合 drift 异常时：抓一次转储（`ACP_DUMP_BODY=1` 重启代理后跑一句），
 > 用 `bili_wire_diff.py --try-rules` 定形态，再用 `--fold-providers provider/model` 覆盖并重转。
+
+## 转储开关（ACP_DUMP_BODY）：用完必关
+
+抓真实请求转储用的代理是**手动带环境变量**起的，跟平时自动拉起的不是同一个——**它会一直把
+每个请求的原文写盘（大会话一次 ~20MB）**，忘了关就会悄悄吃盘。抓完按下面收尾：
+
+```bash
+# 1) 看是否还开着（有没有 raw/ 目录、里面多大）
+du -sh ~/.local/state/billion-context/raw 2>/dev/null
+
+# 2) 关掉带转储的代理（bash/zsh 通用），下次 opencode 一跑会自动拉起不带转储的
+lsof -nP -iTCP:8787  -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
+lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
+
+# 3) 确认不再需要转储后清理（每次请求一个 INCOMING + REQ + RES，占盘主体是 INCOMING）
+rm -rf ~/.local/state/billion-context/raw ~/.local/state/billion-context/dumps
+```
+
+需要再抓时的正确开法（输出进日志文件，不用 `/dev/null` 吞错误）：
+
+```bash
+nohup env ACP_DUMP_BODY=1 bili start >> ~/.local/state/billion-context/dump-proxy.log 2>&1 &
+```
 
 ## 三层验证
 
