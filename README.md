@@ -51,21 +51,16 @@
 git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
 cd ~/opencode/acp2bili && bash sha_check.sh
 
-# 1. 把 acp 状态移进 runtime/acp-state（移动，不是复制）
+# 1. 隔离 + 转换（--quarantine 把默认 acp 目录的状态移过来；移动不是复制）
 #    留在默认目录会让 bili 把这些会话当 legacy：逐字转发，不用我们转换出来的状态
-mkdir -p runtime/acp-state
-find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' \
-  -exec mv {} runtime/acp-state/ \; 2>/dev/null
+python3 bili_convert.py --auto --all --acp-dir runtime/acp-state --quarantine
 
-# 2. 转换（产物落在 runtime/out）
-python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
-
-# 3. 校验 + 安装（只装全 PASS 的；报告落在 runtime/reports）
+# 2. 校验 + 安装（只装全 PASS 的；报告落在 runtime/reports）
 python3 bili_verify_all.py --install --acp runtime/acp-state
 
-# 4. 退出并重新打开 opencode / OpenChamber（代理随宿主一起退出，不用手工 kill）
+# 3. 退出并重新打开 opencode / OpenChamber（代理随宿主一起退出，不用手工 kill）
 
-# 5. 确认产物被认到（只读，不跑会话）
+# 4. 确认产物被认到（只读，不跑会话）
 bili export | grep <sid 的前几位>     # 应显示 blocks=<块数>
 ```
 

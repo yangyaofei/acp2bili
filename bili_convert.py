@@ -53,6 +53,7 @@ import collections
 import hashlib
 import json
 import os
+import shutil
 import pathlib
 import re
 import sqlite3
@@ -841,6 +842,33 @@ MODELS_DEV_CANDIDATES = [
 ]
 
 
+def quarantine_acp_states(dest_dir):
+    """把默认 acp 目录里的状态文件移动到 dest_dir。
+
+    必须移动而不是复制：bili 只按「默认目录里有没有该会话的状态文件」判断 legacy，
+    留着原件就会逐字转发，转换出来的状态不会被使用。
+    """
+    src = os.path.join(default_data_dir(), "storage", "plugin", "acp")
+    dest = os.path.expanduser(dest_dir)
+    if not os.path.isdir(src) or os.path.realpath(src) == os.path.realpath(dest):
+        return 0
+    moved = 0
+    for name in sorted(os.listdir(src)):
+        if not name.endswith(".json"):
+            continue
+        s_path, d_path = os.path.join(src, name), os.path.join(dest, name)
+        try:
+            os.makedirs(dest, exist_ok=True)
+            if os.path.exists(d_path):
+                os.remove(s_path)
+            else:
+                shutil.move(s_path, d_path)
+            moved += 1
+        except Exception as e:
+            print(f"  隔离失败 {name}: {type(e).__name__}: {e}")
+    return moved
+
+
 def opencode_config_paths():
     """所有可能含 provider 定义的配置，按可信度排序。
 
@@ -1004,6 +1032,8 @@ def main():
     p.add_argument("--no-candidates", dest="candidates", action="store_false",
                    help="退回单一预测形态（按 --wire/形态表猜一种；仅用于对照实验）")
     p.add_argument("--manifest", default="", help="可选：写出 core↔消息 映射清单")
+    p.add_argument("--quarantine", action="store_true",
+                   help="先把默认 acp 目录里的状态文件移动到 --acp-dir（移动，不是复制；不隔离会走 legacy 旁路）")
     p.add_argument("--no-fetch-models", action="store_true",
                    help="本机没有 models.dev 快照时不要自动下载（默认会尝试一次，8 秒超时）")
     args = p.parse_args()
@@ -1012,6 +1042,10 @@ def main():
     db = args.db or os.path.join(data_dir, "opencode.db")
     acp_dir = args.acp_dir or os.path.join(data_dir, "storage", "plugin", "acp")
     out = args.out or os.path.join(default_runtime_dir(), "out")
+
+    if getattr(args, "quarantine", False):
+        n = quarantine_acp_states(acp_dir)
+        print(f"已隔离 {n} 个 acp 状态 → {os.path.expanduser(acp_dir)}")
 
     if args.list or (args.auto and not args.acp and not args.sid and not args.all):
         if not os.path.isdir(acp_dir):
@@ -1059,6 +1093,10 @@ def main():
             globals()["_MODELS_DEV"] = None
             print(f"（本机没有 models.dev 快照，已下载到 {got}）")
             load_models_dev()
+
+    if not sids:
+        raise SystemExit(f"{os.path.expanduser(acp_dir)} 里没有可转换的会话"
+                         f"（需要带压缩块的 acp 状态文件）")
 
     ok = skipped = failed = flat_used = 0
     for sid in sids:

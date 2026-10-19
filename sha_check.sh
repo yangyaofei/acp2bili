@@ -1,11 +1,11 @@
 #!/bin/bash
-# acp2bili 完整性自检（v8：跨平台，用 python3 计算哈希，不依赖 md5/md5sum）
+# acp2bili 完整性自检（v9：跨平台 + quarantine）
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
 import hashlib, pathlib, sys
 FILES = [
-    ("bili_convert.py", 55668, "d99e13c60360927c812ed0866db7144c", "d99cb8dc2aa0fdb17d519f99e5277f10c0c989349336f5ce18d14ce18cc0b785"),
+    ("bili_convert.py", 57272, "e0c4903991692101b39454fc66517e85", "7b95bd05386515f0a4bf449153a2d360f644c38b35ee72a2beb32cfcdf5f7f1b"),
     ("bili_verify.py", 17087, "7756d567d54e8f55867b1a78f8af2c25", "73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8"),
     ("bili_verify_all.py", 8925, "1bf1b5b6516d60588bf21fae9ce314a0", "6f4735fca0e5ff6ebe69aa65dd4ce2e2c2a8c8ee023a5e4efd5a26c54530118d"),
     ("bili_wire_diff.py", 12391, "fb54a913e4eab5c02cdfeadb3d7d75ea", "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"),
