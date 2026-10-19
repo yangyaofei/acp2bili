@@ -905,13 +905,33 @@ def opencode_config_paths():
 MODELS_DEV_FETCH_ERROR = ""
 
 
+def has_messages(db_path, sid):
+    """轻量判断：库里还有没有该会话的消息（避免为跳过的会话打印整段标题）。"""
+    db = _db(db_path)
+    try:
+        tables = {r[0] for r in db.execute("select name from sqlite_master where type='table'")}
+        # v1.19 的库里也可能有 session_message 表但为空（数据在 message/part），两张都要试
+        for table in ("session_message", "message"):
+            if table not in tables:
+                continue
+            if db.execute(f"select 1 from {table} where session_id=? limit 1", (sid,)).fetchone():
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def fetch_models_dev(timeout=8.0):
     """本机没有 models.dev 快照时拉一次，存到 runtime/（失败返回 None，不影响转换）。"""
     import urllib.request
     dest = os.path.join(default_runtime_dir(), "models-dev.json")
     try:
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with urllib.request.urlopen("https://models.dev/api.json", timeout=timeout) as r:
+        req = urllib.request.Request("https://models.dev/api.json", headers={
+            "User-Agent": "curl/8.7.1",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             data = r.read()
         if len(data) < 1024:
             return None
@@ -1162,6 +1182,11 @@ def main():
             # loadSync 的候选里也显式含 flatFileNameFor(id)）→ 推不出上游时用扁平名，等效可用
             flat = True
             note = "  (上游推断不出 → flat 名)"
+        if not has_messages(db, sid):
+            print(f"  跳过 {sid}：库里没有原始消息（只剩 acp 状态）")
+            skipped += 1
+            note_issue("跳过：库里没有原始消息", sid)
+            continue
         print(f"\n=== {sid} ===")
         print(f"  acp      : {acp_path}")
         print(f"  provider : {provider or '(未知)'}  →  protocol={protocol}  upstream={up or '(未推断出)'}{note}")
