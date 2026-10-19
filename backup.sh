@@ -1,5 +1,5 @@
 #!/bin/bash
-# opencode_bak —— opencode v1（含 acp 迁移现场）一站式备份，产物集中在 ~/OpenCode_bak/<时间戳>/
+# opencode_bak —— opencode v1（含 acp 迁移现场）一站式备份，产物默认在 <仓库>/runtime/backup/<时间戳>_<主机>/
 #
 # 用法：
 #   bash backup.sh            # 标准备份（库三件套 + 配置 + acp 状态 + bili 会话 + 迁移产物）
@@ -15,7 +15,9 @@ set -eu
 FULL=0; [ "${1:-}" = "--full" ] && FULL=1
 STAMP=$(date "+%Y-%m-%dT%H%M%S")
 HOST=$(hostname -s)
-ROOT="${HOME}/OpenCode_bak/${STAMP}_${HOST}"
+REPO="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME="${ACP2BILI_RUNTIME:-$REPO/runtime}"
+ROOT="${ACP2BILI_BACKUP_DIR:-$RUNTIME/backup}/${STAMP}_${HOST}"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 BILI_DATA="${HOME}/.local/share/billion-context"
@@ -49,11 +51,12 @@ fi
   echo "[ok] opencode/config/（已剔除 node_modules 与 logs）"; }
 
 # 3) acp 状态（默认目录 + 隔离目录，两处都收）
-for d in "$DATA/storage/plugin/acp" "$HOME/acp-state-quarantine"; do
+for d in "$DATA/storage/plugin/acp" "$RUNTIME/acp-state" "$HOME/acp-state-quarantine"; do
   if [ -d "$d" ] && ls "$d"/*.json >/dev/null 2>&1; then
     n=$(ls "$d"/*.json | wc -l | tr -d ' ')
-    mkdir -p "$ROOT/opencode/acp-states$( [ "$d" = "$HOME/acp-state-quarantine" ] && echo '-quarantine' )"
-    cp $CLONE_OPT "$d"/*.json "$ROOT/opencode/acp-states$( [ "$d" = "$HOME/acp-state-quarantine" ] && echo '-quarantine' )/"
+    tag=""; case "$d" in "$RUNTIME/acp-state"|"$HOME/acp-state-quarantine") tag="-quarantine";; esac
+    mkdir -p "$ROOT/opencode/acp-states$tag"
+    cp $CLONE_OPT "$d"/*.json "$ROOT/opencode/acp-states$tag/" 2>/dev/null || true
     echo "[ok] acp 状态 $n 个 ← $d"
   fi
 done
@@ -69,10 +72,10 @@ fi
 [ -d "$BILI_CONF" ] && { cp -R "$BILI_CONF" "$ROOT/bili/config"; echo "[ok] bili/config"; }
 
 # 6) 迁移中间产物：转换输出 + 校验报告（工具本身在 git 仓库里，不用备）
-for d in "$HOME/acp2bili-out" "$HOME/opencode/acp2bili.old"; do
+for d in "$RUNTIME/out" "$RUNTIME/reports" "$HOME/acp2bili-out" "$HOME/opencode/acp2bili.old"; do
   [ -d "$d" ] && { cp -R $CLONE_OPT "$d" "$ROOT/migration/$(basename "$d")"; echo "[ok] migration/$(basename "$d")"; }
 done
-i=0; for f in "$HOME"/verify-report*.txt; do [ -f "$f" ] && { cp "$f" "$ROOT/migration/"; i=$((i+1)); }; done
+i=0; for f in "$RUNTIME"/reports/*.txt "$HOME"/verify-report*.txt; do [ -f "$f" ] && { cp "$f" "$ROOT/migration/"; i=$((i+1)); }; done
 [ "$i" -gt 0 ] && echo "[ok] verify 报告 ×$i"
 
 # 7) 自检 + 清单

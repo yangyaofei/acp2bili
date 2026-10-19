@@ -27,8 +27,21 @@
 | `bili_verify_all.py` | 批量校验 + `--install` 只装全 PASS 的产物到 bili sessions 目录（同名先备份 `.bak`） |
 | `bili_wire_diff.py` | 取证：把真实请求转储折成 core，与我们的账本逐位比，按类（角色×内容类型）给差异样本；`--try-rules` 可对比多种形态规则 |
 | `probe_residual.py` | 残差取证：对对不上的 core 打印源消息形状（parts/status/provider） |
-| `backup.sh` | 一站式备份到 `~/OpenCode_bak/<时间戳>_<主机>/`：opencode 库三件套+配置+acp 状态+bili 会话+迁移产物；`--full` 加整个 storage 与 cache。还原步骤见脚本头注释与 MANIFEST.txt |
+| `backup.sh` | 一站式备份到 `runtime/backup/<时间戳>_<主机>/`：opencode 库三件套+配置+acp 状态+bili 会话+迁移产物；`--full` 加整个 storage 与 cache。还原步骤见脚本头注释与 MANIFEST.txt |
 | `sha_check.sh` | 核对本机脚本是否当前版本（md5+sha256+字节） |
+
+## 目录结构：所有产物都在仓库内的 `runtime/`
+
+仓库克隆到哪，产物就落在哪，不再写死到 `~`。
+
+| 路径 | 内容 |
+|---|---|
+| `runtime/out/` | 转换产物（`<protocol>/<host>_<hash>.json`），`--install` 从这里装进 bili |
+| `runtime/reports/` | 批量校验报告（默认自动写 `verify-<时间>.txt`） |
+| `runtime/acp-state/` | 从 opencode 默认目录挪出来的 acp 状态（隔离区，转换时用 `--acp-dir` 指到这里） |
+| `runtime/backup/<时间戳>_<主机>/` | `backup.sh` 的备份产物 |
+
+`runtime/` 已在 `.gitignore` 里，不会被提交。覆盖方式：`ACP2BILI_RUNTIME=<目录>` 换整个根目录；`--out` / `--report` 单独换某个输出；`ACP2BILI_BACKUP_DIR=<目录>` 换备份根目录。
 
 ## 快速开始（在跑过 opencode-acp 的 opencode v1 机器上）
 
@@ -37,16 +50,16 @@ git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
 cd ~/opencode/acp2bili && bash sha_check.sh        # 确认版本一致
 
 # ① 批量转换（只处理有压缩块的会话；acp 状态已被挪走的加 --acp-dir）
-python3 bili_convert.py --auto --all --acp-dir ~/acp-state-quarantine
+python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
 
 # ② 校验 + 安装（只装全 PASS 的）
-python3 bili_verify_all.py --install --acp ~/acp-state-quarantine --report ~/verify-report.txt
+python3 bili_verify_all.py --install --acp runtime/acp-state
 # （校验器的 --acp 与 --acp-dir 等价，写哪个都行）
 
 # ③ 把默认目录里剩余的 acp 状态隔离（关键：不隔离会走 legacy 旁路，bili 不用我们的产物）
 #    （用 find 而不是 shell 通配：zsh 下目录为空会报 "no matches found"，find 两种 shell 都安全）
-mkdir -p ~/acp-state-quarantine
-find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' -exec cp -n {} ~/acp-state-quarantine/ \; 2>/dev/null
+mkdir -p runtime/acp-state
+find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' -exec cp -n {} runtime/acp-state/ \; 2>/dev/null
 python3 - <<'PY'
 import shutil, pathlib, os
 bili = pathlib.Path.home()/".local/share/billion-context/sessions"
@@ -55,7 +68,7 @@ done = {f.name.rsplit("_",1)[-1].split(".")[0] for d in bili.iterdir() if d.is_d
 src = pathlib.Path.home()/".local/share/opencode/storage/plugin/acp"
 for f in src.glob("ses_*.json"):
     if hashlib.sha256(f.stem.encode()).hexdigest()[:24] in done:
-        shutil.move(str(f), str(pathlib.Path.home()/"acp-state-quarantine"/f.name)); print("隔离", f.name)
+        shutil.move(str(f), str(pathlib.Path.cwd()/"runtime/acp-state"/f.name)); print("隔离", f.name)
 PY
 
 # ④ 重启 bili 代理（精确杀 18787/8787 的监听进程，让新产物生效）
@@ -71,16 +84,42 @@ grep -E "drifted|outbound=" ~/.local/state/billion-context/bili.log | tail -4
 
 **判定标准**：模型正常回复 + `outbound` 是 KiB~MiB 级（比 inbound 小一个量级）= 成功。`drifted` 的含义见下表。
 
-## 在另一台机器上跑（换机器迁移）
+## 在另一台机器上跑（完整流程）
 
-前置：目标机器装好 `billion-context`（`npm i -g billion-context --prefix=~/.local`）+ `bili plugin install opencode`，且它就是**那台跑过 acp 的 opencode v1 机器**（消息库在本机）。然后：
+前提，缺一不可：
 
-1. `git clone` 本仓库；
-2. 与上面「快速开始」①–⑤ 完全相同（工具会自动定位 `~/.local/share/opencode` 的库与 acp 目录）；
-3. 如果数据目录不在默认位置：`--db ~/.local/share/opencode/opencode.db --acp-dir <acp 目录>` 手工指定；
-4. wire 规则自动选择：转换器读库表结构，v1（`message`+`part` 表）→ 1x 规则，v2（`session_message` 表）→ 2x 规则，无需参数。
+1. 目标机器就是**跑过 opencode-acp 的那台**，或者它的 opencode 库里已经有这些会话（用 `opencode session export/import` 迁过）；
+2. 装好 `billion-context` 并接入 opencode（v1、v2 都可以）：`npm i -g billion-context --prefix=~/.local`，再 `bili plugin install opencode`；
+3. 有 `python3`（只用标准库）、`git`；校验要用 `sqlite3`（macOS 自带）。
 
-注意：**跨机器拷 opencode.db 不在本文范围**——会话内容必须已在目标机器的 opencode 库里（它就是原机器，或你已用 `opencode session export/import` 迁好）。
+```bash
+git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
+cd ~/opencode/acp2bili && bash sha_check.sh
+
+# 1. 把 acp 状态收进仓库内的 runtime/acp-state
+#    （不隔离会走 legacy 旁路，bili 不会用我们转换出来的状态）
+mkdir -p runtime/acp-state
+find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' \
+  -exec cp -n {} runtime/acp-state/ \; 2>/dev/null
+
+# 2. 转换（产物落在 runtime/out）
+python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
+
+# 3. 校验 + 安装（报告落在 runtime/reports）
+python3 bili_verify_all.py --install --acp runtime/acp-state
+
+# 4. 重启 bili 代理，让新产物生效
+lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
+
+# 5. 抽跑验收（在会话自己的项目目录里跑）
+cd <该会话的项目目录>
+opencode run --session <sid> "只回复两个字：收到"
+grep -E "drifted|outbound=" ~/.local/state/billion-context/bili.log | tail -4
+```
+
+数据目录不在默认位置时，用 `--db <opencode.db> --acp-dir <acp 目录>` 手工指定。wire 规则自动选：v1 库（`message` + `part` 表）用 1x，v2 库（`session_message` 表）用 2x。
+
+跨机器拷贝 `opencode.db` 不在本文范围：会话内容必须已经在目标机器的 opencode 库里。
 
 ## 1.x wire 形态规则（为什么需要、怎么判）
 
@@ -132,11 +171,11 @@ force（--rc/--fold-providers，可写 "provider" 或 "provider/model"）
 
 ```bash
 # 1) 抓一次转储（见下一节的正确开法），然后：
-python3 bili_convert.py --auto --sid <sid> --acp-dir ~/acp-state-quarantine \
+python3 bili_convert.py --auto --sid <sid> --acp-dir runtime/acp-state \
   --from-dump ~/.local/state/billion-context/raw/<时间戳>-<sid>-INCOMING.txt
 
 # 2) 校验同样用测量法重算（产物与校验必须同源）
-python3 bili_verify.py --acp ~/acp-state-quarantine/<sid>.json \
+python3 bili_verify.py --acp runtime/acp-state/<sid>.json \
   --bili <产物路径> --from-dump <同一个转储> --sid <sid>
 
 # 3) 校验器会打印「锚定统计」：未锚定 = 转储里有、库里对不上宿主消息的条数，
@@ -200,7 +239,10 @@ nohup env ACP_DUMP_BODY=1 bili start >> ~/.local/state/billion-context/dump-prox
 python3 -c "import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:24])" <sid>
 rm ~/.local/share/billion-context/sessions/openai/*_<hash>.json
 
-# 全部：清空 sessions 目录 + 把 acp 状态从隔离目录拷回原位 + 重启代理
+# 全部：清空 sessions 目录 + 把 acp 状态从 runtime/acp-state 拷回原位 + 重启代理
+rm -f ~/.local/share/billion-context/sessions/*/*.json
+cp runtime/acp-state/*.json ~/.local/share/opencode/storage/plugin/acp/
+lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
 ```
 
 ## 已知边界

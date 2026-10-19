@@ -5,10 +5,10 @@
 只有全部 PASS 的才会在 --install 时被装进 bili 目录。
 
 用法：
-  python3 bili_verify_all.py                       # 校验 ~/acp2bili-out 下全部产物
+  python3 bili_verify_all.py                       # 校验 <仓库>/runtime/out 下全部产物
   python3 bili_verify_all.py --limit 5             # 只校验前 5 个（冒烟）
   python3 bili_verify_all.py --install             # 校验通过的直接安装
-  python3 bili_verify_all.py --report ~/verify-report.txt
+  python3 bili_verify_all.py --report runtime/reports/verify.txt
   python3 bili_verify_all.py --acp <acp目录> --db <opencode.db> --out <产物目录> --wire 1x
                                                   # 手工指定（不在默认位置时）
   # 若转换时用了自定义 provider 规则，这里要带同样的 --fold-providers/--rc-providers
@@ -18,7 +18,9 @@
 import argparse, json, os, pathlib, shutil, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
-DEFAULT_OUT = "~/acp2bili-out"
+RUNTIME = pathlib.Path(os.environ.get("ACP2BILI_RUNTIME") or (HERE / "runtime"))
+DEFAULT_OUT = str(RUNTIME / "out")
+DEFAULT_REPORT_DIR = RUNTIME / "reports"
 DEFAULT_ACPDIR = "~/.local/share/opencode/storage/plugin/acp"
 DEFAULT_DB = "~/.local/share/opencode/opencode.db"
 BILI_SESSIONS = "~/.local/share/billion-context/sessions"
@@ -41,7 +43,7 @@ def find_out(root: pathlib.Path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=DEFAULT_OUT, help="转换产物目录（默认 ~/acp2bili-out）")
+    ap.add_argument("--out", default=DEFAULT_OUT, help="转换产物目录（默认 <仓库>/runtime/out）")
     # --acp 与 --acp-dir 等价：转换器叫 --acp-dir，这里历史上叫 --acp，两个都收
     ap.add_argument("--acp", "--acp-dir", dest="acp", default=DEFAULT_ACPDIR,
                     help="acp 状态目录（--acp 与 --acp-dir 等价）")
@@ -53,7 +55,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="只校验前 N 个")
     ap.add_argument("--install", action="store_true",
                     help="把校验通过（全 PASS）的产物装进 ~/.local/share/billion-context/sessions/")
-    ap.add_argument("--report", default="", help="把详细报告写到该文件")
+    ap.add_argument("--report", default="", help="详细报告路径（默认 <仓库>/runtime/reports/verify-<时间>.txt；传空串可关闭）")
     ap.add_argument("--prune", action="store_true",
                     help="删除同会话的陈旧产物文件（去重时保留下来的那个除外）")
     args = ap.parse_args()
@@ -164,9 +166,12 @@ def main():
             print(f"  {sid}")
         if len(skipped) > 20:
             print(f"  … 另有 {len(skipped) - 20} 个")
-    if args.report:
-        pathlib.Path(os.path.expanduser(args.report)).write_text("\n".join(lines_all), encoding="utf-8")
-        print(f"\n详细报告：{os.path.expanduser(args.report)}")
+    report_path = args.report or str(DEFAULT_REPORT_DIR / f"verify-{time.strftime('%Y%m%d-%H%M%S')}.txt")
+    if report_path:
+        rp = pathlib.Path(os.path.expanduser(report_path))
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text("\n".join(lines_all), encoding="utf-8")
+        print(f"\n详细报告：{rp}")
     print("\n=== 批量结论: " + ("全部通过 ✓" if not bad else f"{len(bad)} 个失败 ✗") + " ===")
     return 0 if not bad else 1
 

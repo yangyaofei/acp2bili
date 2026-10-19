@@ -785,6 +785,14 @@ def default_data_dir():
     return os.path.join(base, "opencode")
 
 
+def default_runtime_dir():
+    """所有产物默认放在仓库自己的 runtime/ 下；可用 ACP2BILI_RUNTIME 覆盖。"""
+    env = os.environ.get("ACP2BILI_RUNTIME")
+    if env:
+        return os.path.expanduser(env)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime")
+
+
 def strip_jsonc(text):
     """够用的 jsonc 预处理：去 // 与 /* */ 注释（不处理字符串内的假注释，风险极低）。"""
     out, i, n = [], 0, len(text)
@@ -933,7 +941,7 @@ def main():
                         "protocol/upstream 未给时自动从转储 URL 推断")
     p.add_argument("--data-dir", help="opencode 数据目录（默认 ~/.local/share/opencode 或 $XDG_DATA_HOME）")
     p.add_argument("--sid", help="会话 id；--auto 下不给且只有一个候选时自动选")
-    p.add_argument("--out", help="输出目录（默认 ~/acp2bili-out；建议先输出到这里，校验通过再拷进 bili 的 sessions 目录）")
+    p.add_argument("--out", help="输出目录（默认 <仓库>/runtime/out；可用 ACP2BILI_RUNTIME 改 runtime 根目录）")
     p.add_argument("--protocol", help="wire 协议目录名（默认从配置推断，兜底 openai）")
     p.add_argument("--wire", choices=["", "1x", "2x"], default="",
                    help="assistant 的序列化规则：1x=opencode 1.x（逐条按 provider 判 rc/fold 形态），"
@@ -960,7 +968,7 @@ def main():
     data_dir = args.data_dir or default_data_dir()
     db = args.db or os.path.join(data_dir, "opencode.db")
     acp_dir = args.acp_dir or os.path.join(data_dir, "storage", "plugin", "acp")
-    out = args.out or os.path.join(os.path.expanduser("~"), "acp2bili-out")
+    out = args.out or os.path.join(default_runtime_dir(), "out")
 
     if args.list or (args.auto and not args.acp and not args.sid and not args.all):
         if not os.path.isdir(acp_dir):
