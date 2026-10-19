@@ -892,6 +892,9 @@ def opencode_config_paths():
     return out
 
 
+MODELS_DEV_FETCH_ERROR = ""
+
+
 def fetch_models_dev(timeout=8.0):
     """本机没有 models.dev 快照时拉一次，存到 runtime/（失败返回 None，不影响转换）。"""
     import urllib.request
@@ -905,7 +908,9 @@ def fetch_models_dev(timeout=8.0):
         with open(dest, "wb") as f:
             f.write(data)
         return dest
-    except Exception:
+    except Exception as e:
+        global MODELS_DEV_FETCH_ERROR
+        MODELS_DEV_FETCH_ERROR = f"{type(e).__name__}: {e}"
         return None
 
 
@@ -1093,6 +1098,9 @@ def main():
             globals()["_MODELS_DEV"] = None
             print(f"（本机没有 models.dev 快照，已下载到 {got}）")
             load_models_dev()
+        else:
+            print(f"（本机没有 models.dev 快照，自动下载失败：{MODELS_DEV_FETCH_ERROR or '未知原因'}）"
+                  f"—— 不影响转换，上游 origin 推不出时用 flat 名")
 
     if not sids:
         raise SystemExit(f"{os.path.expanduser(acp_dir)} 里没有可转换的会话"
@@ -1132,11 +1140,20 @@ def main():
         except Exception as e:
             failed += 1
             print(f"  转换失败: {type(e).__name__}: {e}")
-    if len(sids) > 1:
-        print(f"\n完成 {ok} 个，跳过 {skipped} 个（库里无消息），失败 {failed} 个")
-        if flat_used:
-            print(f"{flat_used} 个会话推断不出上游 origin，已用 flat 名 <hash>.json（bili 接受）。"
-                  f"想补全可把 models.dev 快照放到 {os.path.join(default_runtime_dir(), 'models-dev.json')}")
+    print("\n=== 结论 ===")
+    print(f"产物        : {ok} 个（已写到 {out}）")
+    print(f"跳过        : {skipped} 个（库里没有原始消息，只剩 acp 状态 → 无内容可转）")
+    print(f"失败        : {failed} 个")
+    if flat_used:
+        print(f"上游 origin : {flat_used} 个推断不出 → 用 flat 名 <hash>.json")
+        print(f"  影响      : bili 接受这种文件名，功能不受影响；只是文件名少了 host 前缀")
+        if MODELS_DEV_FETCH_ERROR or not load_models_dev():
+            print(f"  原因      : 本机没有 models.dev 快照"
+                  + (f"，下载失败：{MODELS_DEV_FETCH_ERROR}" if MODELS_DEV_FETCH_ERROR else ""))
+        print(f"  补全      : 把 models.dev 快照放到 "
+              f"{os.path.join(default_runtime_dir(), 'models-dev.json')} 后重跑本命令")
+    print("下一步      : 用 bili_verify_all.py --install 校验并安装")
+    print("                装完重启宿主机后，用 bili export | grep <sid> 确认 blocks（它直接读盘，不必先跑会话）")
     print("\n下一步（必须做）：用内容源把产物校验一遍，通过后再拷进 bili 的 sessions 目录：")
     print(f"  python3 bili_verify.py --acp <acp.json> --bili {out}/<protocol>/<host>_<hash>.json --db {db} --sid <sid>")
     return 0 if ok else 1

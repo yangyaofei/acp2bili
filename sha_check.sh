@@ -1,13 +1,13 @@
 #!/bin/bash
-# acp2bili 完整性自检（v9：跨平台 + quarantine）
+# acp2bili 完整性自检（v10）
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
 import hashlib, pathlib, sys
 FILES = [
-    ("bili_convert.py", 57272, "e0c4903991692101b39454fc66517e85", "7b95bd05386515f0a4bf449153a2d360f644c38b35ee72a2beb32cfcdf5f7f1b"),
+    ("bili_convert.py", 58327, "e2d44c5d7cd15455b4ae79028e1ef554", "7d2d5eba20c9f4ae75ff4828ae41aa57fc07b9a77dea2b68bd72ef86dae137a6"),
     ("bili_verify.py", 17087, "7756d567d54e8f55867b1a78f8af2c25", "73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8"),
-    ("bili_verify_all.py", 8925, "1bf1b5b6516d60588bf21fae9ce314a0", "6f4735fca0e5ff6ebe69aa65dd4ce2e2c2a8c8ee023a5e4efd5a26c54530118d"),
+    ("bili_verify_all.py", 9831, "8c842f5ad4bc3220c4d8623e653b4697", "3530f52ee3b32a2cf4bb1002b8cde979a482a4ec902400c5a4a7f301f8fa39a4"),
     ("bili_wire_diff.py", 12391, "fb54a913e4eab5c02cdfeadb3d7d75ea", "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"),
     ("probe_residual.py", 3986, "ae5704282a4cd9943f6055644384747f", "1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749"),
     ("backup.sh", 4872, "1dd76dfd7f0d0ba67a0635684fc017a4", "7bc1cdffdc3d1b08c56f946d7a90b2c906b8d39ccaf7aeddc53f23b8a0492b5f"),

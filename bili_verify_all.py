@@ -172,6 +172,18 @@ def main():
         rp.parent.mkdir(parents=True, exist_ok=True)
         rp.write_text("\n".join(lines_all), encoding="utf-8")
         print(f"\n详细报告：{rp}")
+    flat = sum(1 for p, _ in items if re.match(r"^[0-9a-f]{24}\.json$", p.name))
+    print("\n=== 结论 ===")
+    print(f"校验        : {len(ok)} 通过 / {len(bad)} 失败 / {len(skipped)} 跳过")
+    if installed:
+        print(f"安装        : {installed} 个 → {os.path.expanduser(BILI_SESSIONS)}/")
+    if flat:
+        print(f"文件名      : {flat} 个是 flat 名 <hash>.json（上游 origin 没推断出）")
+        print(f"  影响      : bili 接受，功能不受影响；只是文件名少了 host 前缀")
+    if skipped:
+        print(f"跳过        : {len(skipped)} 个没有 acp 状态（没有压缩块或未隔离），未参与校验")
+    print("待确认      : `bili export | grep <sid>` 能看到这些会话与 blocks=<块数>，才算真正生效")
+    print("              （bili export 直接读盘，不必先跑会话；若看不到，先确认宿主已重启）")
     print("\n=== 批量结论: " + ("全部通过 ✓" if not bad else f"{len(bad)} 个失败 ✗") + " ===")
     return 0 if not bad else 1
 
