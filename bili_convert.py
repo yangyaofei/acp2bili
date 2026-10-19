@@ -1050,6 +1050,7 @@ def main():
     p.add_argument("--no-fetch-models", action="store_true",
                    help="本机没有 models.dev 快照时不要自动下载（默认会尝试一次，8 秒超时）")
     args = p.parse_args()
+    args.acp_dir_given = any(a == "--acp-dir" or a.startswith("--acp-dir=") for a in sys.argv[1:])
 
     data_dir = args.data_dir or default_data_dir()
     db = args.db or os.path.join(data_dir, "opencode.db")
@@ -1109,6 +1110,16 @@ def main():
         else:
             print(f"（本机没有 models.dev 快照，自动下载失败：{MODELS_DEV_FETCH_ERROR or '未知原因'}）"
                   f"—— 不影响转换，上游 origin 推不出时用 flat 名")
+
+    if not sids and not getattr(args, "acp_dir_given", False):
+        # 兼容旧布局：状态曾被手工搬到 ~/acp-state-quarantine（旧流程的默认位置）
+        legacy = os.path.expanduser("~/acp-state-quarantine")
+        if os.path.isdir(legacy):
+            import glob as _glob2
+            if _glob2.glob(os.path.join(legacy, "*.json")):
+                print(f"（{os.path.expanduser(acp_dir)} 为空，自动改用旧隔离目录 {legacy}）")
+                acp_dir = legacy
+                sids = [r["sid"] for r in list_convertible(acp_dir) if r["blocks"]]
 
     if not sids:
         import glob as _glob

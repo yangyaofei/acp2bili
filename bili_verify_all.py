@@ -101,6 +101,10 @@ def main():
     if args.limit:
         items = items[:args.limit]
     if not items:
+        legacy = os.path.expanduser("~/acp2bili-out")
+        if os.path.isdir(legacy):
+            print(f"（提示：{os.path.expanduser(DEFAULT_OUT)} 下没有产物，但旧产物目录 {legacy} 存在；"
+                  f"要校验旧的加 --out {legacy}）")
         print(f"{out_root} 下没有找到转换产物。先跑 bili_convert.py")
         return 2
 
