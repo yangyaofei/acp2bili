@@ -63,16 +63,13 @@ python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
 # 3. 校验 + 安装（只装全 PASS 的；报告落在 runtime/reports）
 python3 bili_verify_all.py --install --acp runtime/acp-state
 
-# 4. 重启 bili 代理，让新产物生效
-lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
+# 4. 退出并重新打开 opencode / OpenChamber（代理随宿主一起退出，不用手工 kill）
 
-# 5. 抽跑验收（在会话自己的项目目录里跑）
-cd <该会话的项目目录>
-opencode run --session <sid> "只回复两个字：收到"
-grep -E "drifted|outbound=" ~/.local/state/billion-context/bili.log | tail -4
+# 5. 确认产物被认到（只读，不跑会话）
+bili export | grep <sid 的前几位>     # 应显示 blocks=<块数>
 ```
 
-判定标准：模型正常回复，并且 `outbound` 比 `inbound` 小一个量级（KiB~MiB 级）。
+真实请求里的效果（drift、outbound）见下面的「三层验证」，按需再看。
 
 数据目录不在默认位置时，第 2、3 步加 `--db <opencode.db> --acp-dir <acp 目录>` 手工指定。
 
@@ -97,7 +94,7 @@ bash backup.sh            # 1. 先备份（库三件套 + 配置 + acp 状态 + 
 # 3. 重跑转换：v2 的库结构会让转换器自动切到 2x 规则
 python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
 python3 bili_verify_all.py --install --acp runtime/acp-state
-# 4. 抽跑验收，看 drifted 与 outbound
+# 4. 退出并重新打开 opencode / OpenChamber，然后 bili export | grep <sid> 看 blocks
 ```
 
 升级后必须重转一遍：v2 写进请求的形式和 v1 不同，旧产物会有部分对不上（表现为上下文先变大再回落）。
