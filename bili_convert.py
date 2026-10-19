@@ -831,6 +831,8 @@ def session_provider(db_path, sid):
     db = _db(db_path)
     tables = {r[0] for r in db.execute("select name from sqlite_master where type='table'")}
     table = "session_v2" if "session_v2" in tables else "session"
+    if table not in tables:
+        return ""
     row = db.execute(f"select model from {table} where id=?", (sid,)).fetchone()
     if not row or not row[0]:
         return ""
