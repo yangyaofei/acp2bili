@@ -592,6 +592,9 @@ def note_issue(kind, sid, detail=""):
     RUN_ISSUES[kind].append((sid, detail))
 
 
+PRODUCED = []          # 本次运行真正写出的产物路径
+
+
 def convert(args):
     rows, mode = load_rows(args.db, args.sid)
     if not rows:
@@ -774,6 +777,7 @@ def convert(args):
     print(f"blocks       : {len(blocks)} (active {sum(1 for b in blocks if b['active'])})")
     print(f"refs         : {len(ref_of_core)}")
     print(f"tail cores   : {len(messages)}")
+    PRODUCED.append(str(target))
     print(f"output       : {target}")
 
     if args.manifest:
@@ -1066,6 +1070,8 @@ def main():
                         "未命中的候选留在账本里当良性死账（与宿主 compaction 前缀同类）")
     p.add_argument("--no-candidates", dest="candidates", action="store_false",
                    help="退回单一预测形态（按 --wire/形态表猜一种；仅用于对照实验）")
+    p.add_argument("--prune", action="store_true",
+                   help="删除输出目录里同会话的陈旧产物（旧 flat 名/旧规则产物）")
     p.add_argument("--manifest", default="", help="可选：写出 core↔消息 映射清单")
     p.add_argument("--quarantine", action="store_true",
                    help="先把默认 acp 目录里的状态文件移动到 --acp-dir（移动，不是复制；不隔离会走 legacy 旁路）")
@@ -1205,10 +1211,37 @@ def main():
             failed += 1
             print(f"  转换失败: {type(e).__name__}: {e}")
     produced = sorted(pathlib.Path(out).rglob("*.json")) if os.path.isdir(out) else []
-    flat_used = sum(1 for p_ in produced if re.fullmatch(r"[0-9a-f]{24}\.json", p_.name))
-    for p_ in produced:
-        if re.fullmatch(r"[0-9a-f]{24}\.json", p_.name):
-            note_issue("文件名是 flat 名（上游 origin 推断不出）", p_.name)
+    now = {os.path.realpath(x) for x in PRODUCED}
+    flat_used = sum(1 for x in PRODUCED
+                    if re.fullmatch(r"[0-9a-f]{24}\.json", os.path.basename(x)))
+    for x in PRODUCED:
+        if re.fullmatch(r"[0-9a-f]{24}\.json", os.path.basename(x)):
+            note_issue("文件名是 flat 名（上游 origin 推断不出）", os.path.basename(x))
+
+    # 同会话存在多份产物时（旧 flat 名 / 旧规则转的），只保留本次写出的那份
+    groups = {}
+    for f in produced:
+        m = re.search(r"([0-9a-f]{24})\.json$", f.name)
+        if m:
+            groups.setdefault(m.group(1), []).append(f)
+    stale = []
+    for files in groups.values():
+        if len(files) < 2:
+            continue
+        keep = [f for f in files if os.path.realpath(f) in now]
+        keep = keep[-1] if keep else sorted(files, key=lambda x: x.stat().st_mtime)[-1]
+        stale += [f for f in files if f != keep]
+    if stale and getattr(args, "prune", False):
+        for f in stale:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        print(f"\n[陈旧产物] 已删除 {len(stale)} 个旧文件")
+        stale = []
+    if stale:
+        print(f"\n[陈旧产物] {len(stale)} 个同会话的旧文件（例如 {stale[0].name}）——"
+              f"本次新产物已覆盖它们的作用；加 --prune 可删除")
     print("\n=== 结论 ===")
     print(f"产物        : {ok} 个（已写到 {out}）")
     print(f"跳过        : {skipped} 个（库里没有原始消息，只剩 acp 状态 → 无内容可转）")
