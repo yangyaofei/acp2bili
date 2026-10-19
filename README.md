@@ -43,60 +43,15 @@
 
 `runtime/` 已在 `.gitignore` 里，不会被提交。覆盖方式：`ACP2BILI_RUNTIME=<目录>` 换整个根目录；`--out` / `--report` 单独换某个输出；`ACP2BILI_BACKUP_DIR=<目录>` 换备份根目录。
 
-## 快速开始（在跑过 opencode-acp 的 opencode v1 机器上）
+## 怎么跑
 
-```bash
-git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
-cd ~/opencode/acp2bili && bash sha_check.sh        # 确认版本一致
-
-# ① 批量转换（只处理有压缩块的会话；acp 状态已被挪走的加 --acp-dir）
-python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
-
-# ② 校验 + 安装（只装全 PASS 的）
-python3 bili_verify_all.py --install --acp runtime/acp-state
-# （校验器的 --acp 与 --acp-dir 等价，写哪个都行）
-
-# ③ 把默认目录里剩余的 acp 状态隔离（关键：不隔离会走 legacy 旁路，bili 不用我们的产物）
-#    （用 find 而不是 shell 通配：zsh 下目录为空会报 "no matches found"，find 两种 shell 都安全）
-mkdir -p runtime/acp-state
-find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' -exec cp -n {} runtime/acp-state/ \; 2>/dev/null
-python3 - <<'PY'
-import shutil, pathlib, os
-bili = pathlib.Path.home()/".local/share/billion-context/sessions"
-import hashlib
-done = {f.name.rsplit("_",1)[-1].split(".")[0] for d in bili.iterdir() if d.is_dir() for f in d.glob("*.json")}
-src = pathlib.Path.home()/".local/share/opencode/storage/plugin/acp"
-for f in src.glob("ses_*.json"):
-    if hashlib.sha256(f.stem.encode()).hexdigest()[:24] in done:
-        shutil.move(str(f), str(pathlib.Path.cwd()/"runtime/acp-state"/f.name)); print("隔离", f.name)
-PY
-
-# ④ 重启 bili 代理（精确杀 18787/8787 的监听进程，让新产物生效）
-#    （while-read 写法 bash/zsh 通用；xargs -r 是 GNU 专用，macOS 自带的 xargs 不认）
-lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
-lsof -nP -iTCP:8787  -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"; done
-
-# ⑤ 抽跑验收：挑最大的会话发一句
-cd <该会话的项目目录>
-opencode run --session <sid> "只回复两个字：收到"
-grep -E "drifted|outbound=" ~/.local/state/billion-context/bili.log | tail -4
-```
-
-**判定标准**：模型正常回复 + `outbound` 是 KiB~MiB 级（比 inbound 小一个量级）= 成功。`drifted` 的含义见下表。
-
-## 在另一台机器上跑（完整流程）
-
-前提，缺一不可：
-
-1. 目标机器就是**跑过 opencode-acp 的那台**，或者它的 opencode 库里已经有这些会话（用 `opencode session export/import` 迁过）；
-2. 装好 `billion-context` 并接入 opencode（v1、v2 都可以）：`npm i -g billion-context --prefix=~/.local`，再 `bili plugin install opencode`；
-3. 有 `python3`（只用标准库）、`git`；校验要用 `sqlite3`（macOS 自带）。
+流程只有一套。下面的命令在仓库目录里跑，产物全部落在仓库自己的 `runtime/` 下。
 
 ```bash
 git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
 cd ~/opencode/acp2bili && bash sha_check.sh
 
-# 1. 把 acp 状态收进仓库内的 runtime/acp-state
+# 1. 把 acp 状态收进 runtime/acp-state
 #    （不隔离会走 legacy 旁路，bili 不会用我们转换出来的状态）
 mkdir -p runtime/acp-state
 find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' \
@@ -105,7 +60,7 @@ find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' \
 # 2. 转换（产物落在 runtime/out）
 python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
 
-# 3. 校验 + 安装（报告落在 runtime/reports）
+# 3. 校验 + 安装（只装全 PASS 的；报告落在 runtime/reports）
 python3 bili_verify_all.py --install --acp runtime/acp-state
 
 # 4. 重启 bili 代理，让新产物生效
@@ -117,9 +72,35 @@ opencode run --session <sid> "只回复两个字：收到"
 grep -E "drifted|outbound=" ~/.local/state/billion-context/bili.log | tail -4
 ```
 
-数据目录不在默认位置时，用 `--db <opencode.db> --acp-dir <acp 目录>` 手工指定。wire 规则自动选：v1 库（`message` + `part` 表）用 1x，v2 库（`session_message` 表）用 2x。
+判定标准：模型正常回复，并且 `outbound` 比 `inbound` 小一个量级（KiB~MiB 级）。
 
-跨机器拷贝 `opencode.db` 不在本文范围：会话内容必须已经在目标机器的 opencode 库里。
+数据目录不在默认位置时，第 2、3 步加 `--db <opencode.db> --acp-dir <acp 目录>` 手工指定。
+
+## opencode v1 与 v2 的差别
+
+转换器读库表结构自动选规则，两条命令完全一样，不需要额外参数。
+
+| 库结构 | 判据 | 使用的 wire 规则 |
+|---|---|---|
+| opencode v1 | 有 `message` + `part` 表 | 1x |
+| opencode v2 | 有 `session_message` 表 | 2x |
+
+其余步骤（收 acp 状态、校验安装、重启、抽跑）两者相同。
+
+## 从 v1 升级到 v2 之后
+
+升级会原地改库，没有自动备份、没有降级命令。按这个顺序做：
+
+```bash
+bash backup.sh            # 1. 先备份（库三件套 + 配置 + acp 状态 + bili 会话）
+# 2.（按 opencode 自己的方式升级）
+# 3. 重跑转换：v2 的库结构会让转换器自动切到 2x 规则
+python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
+python3 bili_verify_all.py --install --acp runtime/acp-state
+# 4. 抽跑验收，看 drifted 与 outbound
+```
+
+升级后必须重转一遍：v2 写进请求的形式和 v1 不同，旧产物会有部分对不上（表现为上下文先变大再回落）。
 
 ## 1.x wire 形态规则（为什么需要、怎么判）
 
