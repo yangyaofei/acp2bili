@@ -1111,8 +1111,25 @@ def main():
                   f"—— 不影响转换，上游 origin 推不出时用 flat 名")
 
     if not sids:
-        raise SystemExit(f"{os.path.expanduser(acp_dir)} 里没有可转换的会话"
-                         f"（需要带压缩块的 acp 状态文件）")
+        import glob as _glob
+        cand = {
+            "acp 默认目录": os.path.expanduser(
+                "~/.local/share/opencode/storage/plugin/acp"),
+            "旧隔离目录": os.path.expanduser("~/acp-state-quarantine"),
+        }
+        lines = [f"{os.path.expanduser(acp_dir)} 里没有可转换的会话"
+                 f"（需要带压缩块的 acp 状态文件）", ""]
+        for name, d in cand.items():
+            n = len(_glob.glob(os.path.join(d, "*.json"))) if os.path.isdir(d) else 0
+            lines.append(f"  {name}: {d}  →  {n} 个状态文件")
+        installed = os.path.expanduser("~/.local/share/billion-context/sessions")
+        n_inst = len(_glob.glob(os.path.join(installed, "*", "*.json"))) if os.path.isdir(installed) else 0
+        lines += ["",
+                  f"  已安装的 bili 会话: {installed}  →  {n_inst} 个",
+                  "",
+                  "状态文件在别处：加 --acp-dir <那个目录>",
+                  "已经转换并安装过：不必重跑（上面 已安装的 bili 会话 不为 0 即是）"]
+        raise SystemExit("\n".join(lines))
 
     ok = skipped = failed = flat_used = 0
     for sid in sids:

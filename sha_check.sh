@@ -1,11 +1,11 @@
 #!/bin/bash
-# acp2bili 完整性自检（v11）
+# acp2bili 完整性自检（v12）
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
 import hashlib, pathlib, sys
 FILES = [
-    ("bili_convert.py", 59740, "0c43ddadb6d472d0da5d2fd74ae18f43", "3ffd41096717accfe55cdf55bc7de7a2f18025e4a2554af7883d0f449f79d3c0"),
+    ("bili_convert.py", 60714, "14ee21f137dee57fc8713d39503b266d", "369d2dda594abe8e37689e7c1dcf16cb3b8a3683b0162fa52553a74d0e97c7ab"),
     ("bili_verify.py", 17087, "7756d567d54e8f55867b1a78f8af2c25", "73f5b8c182f4d2d931710465ddcad3b18ae128b19d7b2f25d2ae25e4e1e77bf8"),
     ("bili_verify_all.py", 10785, "ca7ac384e6040048de7cf1cdf6af53c4", "9daff24d85a11633c50a369931d9d5872d85cee693088d10ba422d4ca66ee2ef"),
     ("bili_wire_diff.py", 12391, "fb54a913e4eab5c02cdfeadb3d7d75ea", "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"),
