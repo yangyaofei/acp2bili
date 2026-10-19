@@ -589,7 +589,7 @@ def convert(args):
     if not rows:
         print("  ✗ 库里已无该会话的消息（可能被 session-reaper 之类清理过）——只剩 acp 状态、"
               "没有原始内容，转换无意义，跳过（不写产物）")
-        return
+        return "skip"
     wire = getattr(args, "wire", "") or ("1x" if mode == "v1" else "2x")
     fold_extra = [s.strip() for s in (getattr(args, "fold_providers", "") or "").split(",") if s.strip()]
     rc_force = [s.strip() for s in (getattr(args, "rc_providers", "") or "").split(",") if s.strip()]
@@ -777,7 +777,7 @@ def convert(args):
                        "active": sum(1 for b in blocks if b["active"]), "tail": len(messages)},
         }, ensure_ascii=False))
         print(f"manifest     : {man}")
-    return 0
+    return "ok"
 
 
 def default_data_dir():
@@ -835,9 +835,27 @@ _MODELS_DEV = None
 MODELS_DEV_CANDIDATES = [
     "~/.cache/opencode/buraunkan/models-dev.json",   # old 机 & 本机都有（catalog-bridge 落盘）
     "~/.cache/opencode/models-dev.json",
+    os.path.join(default_runtime_dir(), "models-dev.json"),
     "./models-dev.json",
     "./tmp/models.dev.json",
 ]
+
+
+def fetch_models_dev(timeout=8.0):
+    """本机没有 models.dev 快照时拉一次，存到 runtime/（失败返回 None，不影响转换）。"""
+    import urllib.request
+    dest = os.path.join(default_runtime_dir(), "models-dev.json")
+    try:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with urllib.request.urlopen("https://models.dev/api.json", timeout=timeout) as r:
+            data = r.read()
+        if len(data) < 1024:
+            return None
+        with open(dest, "wb") as f:
+            f.write(data)
+        return dest
+    except Exception:
+        return None
 
 
 def load_models_dev():
@@ -963,6 +981,8 @@ def main():
     p.add_argument("--no-candidates", dest="candidates", action="store_false",
                    help="退回单一预测形态（按 --wire/形态表猜一种；仅用于对照实验）")
     p.add_argument("--manifest", default="", help="可选：写出 core↔消息 映射清单")
+    p.add_argument("--no-fetch-models", action="store_true",
+                   help="本机没有 models.dev 快照时不要自动下载（默认会尝试一次，8 秒超时）")
     args = p.parse_args()
 
     data_dir = args.data_dir or default_data_dir()
@@ -1010,7 +1030,14 @@ def main():
     else:
         raise SystemExit("请用 --auto（推荐）或显式给 --acp/--db/--sid")
 
-    ok = 0
+    if not load_models_dev() and not getattr(args, "no_fetch_models", False):
+        got = fetch_models_dev()
+        if got:
+            globals()["_MODELS_DEV"] = None
+            print(f"（本机没有 models.dev 快照，已下载到 {got}）")
+            load_models_dev()
+
+    ok = skipped = failed = flat_used = 0
     for sid in sids:
         acp_path = args.acp or os.path.join(acp_dir, f"{sid}.json")
         provider = session_provider(db, sid)
@@ -1023,9 +1050,8 @@ def main():
             # 文件名里的 host 只是给人看的命名空间（kernel 的 loadAll 按记录里的 id 建索引，
             # loadSync 的候选里也显式含 flatFileNameFor(id)）→ 推不出上游时用扁平名，等效可用
             flat = True
-            note = "  (上游 origin 推断不出 → 自动用 flat 名 <hash>.json)"
-            if not load_models_dev():
-                note += "\n            提示：可 curl -s https://models.dev/api.json -o models-dev.json 补全 provider 表"
+            note = "  (上游推断不出 → flat 名)"
+            flat_used += 1
         print(f"\n=== {sid} ===")
         print(f"  acp      : {acp_path}")
         print(f"  provider : {provider or '(未知)'}  →  protocol={protocol}  upstream={up or '(未推断出)'}{note}")
@@ -1033,12 +1059,19 @@ def main():
                                 upstream=up or "", title=args.title, manifest=args.manifest,
                                 flat=flat, wire=args.wire, candidates=args.candidates)
         try:
-            convert(ns)
-            ok += 1
+            st = convert(ns)
+            if st == "skip":
+                skipped += 1
+            else:
+                ok += 1
         except Exception as e:
+            failed += 1
             print(f"  转换失败: {type(e).__name__}: {e}")
     if len(sids) > 1:
-        print(f"\n完成 {ok}/{len(sids)} 个")
+        print(f"\n完成 {ok} 个，跳过 {skipped} 个（库里无消息），失败 {failed} 个")
+        if flat_used:
+            print(f"{flat_used} 个会话推断不出上游 origin，已用 flat 名 <hash>.json（bili 接受）。"
+                  f"想补全可把 models.dev 快照放到 {os.path.join(default_runtime_dir(), 'models-dev.json')}")
     print("\n下一步（必须做）：用内容源把产物校验一遍，通过后再拷进 bili 的 sessions 目录：")
     print(f"  python3 bili_verify.py --acp <acp.json> --bili {out}/<protocol>/<host>_<hash>.json --db {db} --sid <sid>")
     return 0 if ok else 1

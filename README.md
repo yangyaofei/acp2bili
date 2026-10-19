@@ -51,11 +51,11 @@
 git clone https://github.com/yangyaofei/acp2bili.git ~/opencode/acp2bili
 cd ~/opencode/acp2bili && bash sha_check.sh
 
-# 1. 把 acp 状态收进 runtime/acp-state
-#    （不隔离会走 legacy 旁路，bili 不会用我们转换出来的状态）
+# 1. 把 acp 状态移进 runtime/acp-state（移动，不是复制）
+#    留在默认目录会让 bili 把这些会话当 legacy：逐字转发，不用我们转换出来的状态
 mkdir -p runtime/acp-state
 find ~/.local/share/opencode/storage/plugin/acp -maxdepth 1 -name '*.json' \
-  -exec cp -n {} runtime/acp-state/ \; 2>/dev/null
+  -exec mv {} runtime/acp-state/ \; 2>/dev/null
 
 # 2. 转换（产物落在 runtime/out）
 python3 bili_convert.py --auto --all --acp-dir runtime/acp-state
