@@ -101,6 +101,16 @@ def main():
         print(("PASS " if c_ok else "FAIL ") + "C 两处都空：退出并打印三处计数")
         if not c_ok:
             print(r.stdout[-800:], r.stderr[-400:]); ok = False
+        # D：--dry-run + --compare（同一批产物应判「一致」，且不落盘）
+        before = set((tmp / "runtime" / "out").rglob("*.json"))
+        r = run(["--auto", "--all", "--no-fetch-models", "--dry-run",
+                 "--compare", str(tmp / "runtime" / "out"), "--acp-dir", str(tmp / "state-a"),
+                 "--db", str(db)], env)
+        after = set((tmp / "runtime" / "out").rglob("*.json"))
+        d_ok = r.returncode == 0 and "对比结论   : 一致" in r.stdout and before == after
+        print(("PASS " if d_ok else "FAIL ") + "D --dry-run + --compare 判一致且不写盘")
+        if not d_ok:
+            print(r.stdout[-800:], r.stderr[-400:]); ok = False
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\n冒烟测试：" + ("全部通过 ✓" if ok else "有失败 ✗"))

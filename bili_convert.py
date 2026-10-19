@@ -595,6 +595,64 @@ def note_issue(kind, sid, detail=""):
 PRODUCED = []          # 本次运行真正写出的产物路径
 
 
+
+def _find_product(root, sid):
+    """在目录里按会话哈希找旧产物（规范名或 flat 名都能匹配）。"""
+    h = hashlib.sha256(sid.encode()).hexdigest()[:24]
+    for f in sorted(pathlib.Path(root).rglob(f"*{h}.json")):
+        return f
+    return None
+
+
+def _diff_product(old_path, doc):
+    """对比旧产物（例如 V1 库 + 1x 规则）与本次产物（例如 V2 库 + 2x 规则）。"""
+    old = json.loads(pathlib.Path(old_path).read_text())
+    ost = (old.get("payload") or {}).get("state") or {}
+    nst = doc["payload"]["state"]
+    o_raw = (ost.get("messageRefs") or {}).get("byRaw") or {}
+    n_raw = (nst.get("messageRefs") or {}).get("byRaw") or {}
+    o_ref = (ost.get("messageRefs") or {}).get("byRef") or {}
+    n_ref = (nst.get("messageRefs") or {}).get("byRef") or {}
+
+    o_ids, n_ids = set(o_raw), set(n_raw)
+    only_o, only_n, common = o_ids - n_ids, n_ids - o_ids, o_ids & n_ids
+    ref_bad = [i for i in common if o_raw[i] != n_raw[i]]
+
+    o_blocks = {b["blockId"]: b for b in (ost.get("blocks") or [])}
+    n_blocks = {b["blockId"]: b for b in nst["blocks"]}
+    blk_diff = []
+    for bid in sorted(set(o_blocks) | set(n_blocks)):
+        ob, nb = o_blocks.get(bid), n_blocks.get(bid)
+        if ob is None or nb is None:
+            blk_diff.append((bid, "仅旧" if nb is None else "仅新", 0, 0))
+            continue
+        od, nd = set(ob.get("directMessageIds") or []), set(nb.get("directMessageIds") or [])
+        oe, ne = set(ob.get("effectiveMessageIds") or []), set(nb.get("effectiveMessageIds") or [])
+        if od != nd or oe != ne or ob.get("tier") != nb.get("tier") or ob.get("active") != nb.get("active"):
+            blk_diff.append((bid, "覆盖不同", len(od - nd), len(nd - od)))
+
+    o_tail = [m.get("id") for m in ((old.get("payload") or {}).get("messages") or [])]
+    n_tail = [m.get("id") for m in doc["payload"]["messages"]]
+    first_tail = next((i for i, (a, b) in enumerate(zip(o_tail, n_tail)) if a != b), None)
+    if first_tail is None and len(o_tail) != len(n_tail):
+        first_tail = min(len(o_tail), len(n_tail))
+
+    print(f"\n=== 与旧产物对比（{old_path}）===")
+    print(f"core 编号  : 旧 {len(o_ids)} / 新 {len(n_ids)} / 相同 {len(common)} / "
+          f"仅旧 {len(only_o)} / 仅新 {len(only_n)}")
+    print(f"编号→ref   : 相同的编号里 ref 不同 {len(ref_bad)} 个")
+    print(f"块         : 旧 {len(o_blocks)} / 新 {len(n_blocks)}；有差异 {len(blk_diff)} 个")
+    print(f"尾段       : 旧 {len(o_tail)} / 新 {len(n_tail)}"
+          + ("" if first_tail is None else f"；首个不同位 {first_tail}"))
+    for bid, kind, a, b in blk_diff[:8]:
+        print(f"    {bid}: {kind}" + (f"（仅旧 {a} / 仅新 {b} 条）" if kind == "覆盖不同" else ""))
+    if blk_diff[8:]:
+        print(f"    …… 其余 {len(blk_diff) - 8} 个块")
+    same = not only_o and not only_n and not ref_bad and not blk_diff and first_tail is None
+    print(f"对比结论   : {'一致 ✓' if same else '有差异（见上）'}")
+    return same
+
+
 def convert(args):
     rows, mode = load_rows(args.db, args.sid)
     if not rows:
@@ -771,13 +829,20 @@ def convert(args):
     name = f"{digest}.json" if getattr(args, "flat", False) else f"{host}_{digest}.json"
     target = pathlib.Path(args.out) / args.protocol / name
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(doc, ensure_ascii=False))
+    old_path = _find_product(args.compare, args.sid) if getattr(args, "compare", "") else None
+    if old_path:
+        _diff_product(old_path, doc)
+    if getattr(args, "dry_run", False):
+        print("dry-run      : 未写产物")
+    else:
+        target.write_text(json.dumps(doc, ensure_ascii=False))
 
     print(f"cores        : {len(cores)}")
     print(f"blocks       : {len(blocks)} (active {sum(1 for b in blocks if b['active'])})")
     print(f"refs         : {len(ref_of_core)}")
     print(f"tail cores   : {len(messages)}")
-    PRODUCED.append(str(target))
+    if not getattr(args, "dry_run", False):
+        PRODUCED.append(str(target))
     print(f"output       : {target}")
 
     if args.manifest:
@@ -1070,6 +1135,10 @@ def main():
                         "未命中的候选留在账本里当良性死账（与宿主 compaction 前缀同类）")
     p.add_argument("--no-candidates", dest="candidates", action="store_false",
                    help="退回单一预测形态（按 --wire/形态表猜一种；仅用于对照实验）")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="只打印结果与对比，不写产物")
+    p.add_argument("--compare", default="",
+                   help="与旧产物目录对比（例如 V1 库转出来的那批），只读不写")
     p.add_argument("--prune", action="store_true",
                    help="删除输出目录里同会话的陈旧产物（旧 flat 名/旧规则产物）")
     p.add_argument("--manifest", default="", help="可选：写出 core↔消息 映射清单")
@@ -1198,7 +1267,9 @@ def main():
         print(f"  provider : {provider or '(未知)'}  →  protocol={protocol}  upstream={up or '(未推断出)'}{note}")
         ns = argparse.Namespace(acp=acp_path, db=db, sid=sid, out=out, protocol=protocol,
                                 upstream=up or "", title=args.title, manifest=args.manifest,
-                                flat=flat, wire=args.wire, candidates=args.candidates)
+                                flat=flat, wire=args.wire, candidates=args.candidates,
+                                compare=getattr(args, "compare", ""),
+                                dry_run=getattr(args, "dry_run", False))
         try:
             st = convert(ns)
             if st == "skip":
@@ -1243,7 +1314,8 @@ def main():
         print(f"\n[陈旧产物] {len(stale)} 个同会话的旧文件（例如 {stale[0].name}）——"
               f"本次新产物已覆盖它们的作用；加 --prune 可删除")
     print("\n=== 结论 ===")
-    print(f"产物        : {ok} 个（已写到 {out}）")
+    print(f"产物        : {ok} 个" + ("（dry-run，未写盘）" if getattr(args, "dry_run", False)
+                                      else f"（已写到 {out}）"))
     print(f"跳过        : {skipped} 个（库里没有原始消息，只剩 acp 状态 → 无内容可转）")
     print(f"失败        : {failed} 个")
     if flat_used:

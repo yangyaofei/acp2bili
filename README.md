@@ -70,6 +70,28 @@ bili export | grep <sid 的前几位>     # 应显示 blocks=<块数>
 
 数据目录不在默认位置时，第 2、3 步加 `--db <opencode.db> --acp-dir <acp 目录>` 手工指定。
 
+## 升级 V2 前后对比（--dry-run / --compare）
+
+升级前后各转一次，用同一个 acp 状态文件，才能证明「升级没有改变转换结果」。
+
+```bash
+# 升级前（V1 库）：先把产物转出来，留着当基线
+python3 bili_convert.py --auto --all --acp-dir runtime/acp-state --out runtime/out-v1
+
+# ……升级到 V2、迁移完成后……
+
+# 升级后（V2 库）：只对比，不写盘
+python3 bili_convert.py --auto --all --dry-run --compare runtime/out-v1 \
+  --acp-dir runtime/acp-state
+```
+
+输出会逐项给出：core 编号差异（仅旧/仅新）、同一编号的 ref 是否变化、
+块覆盖是否一致、尾段顺序；最后一行是 `对比结论 : 一致 ✓` 或 `有差异（见上）`。
+
+- 默认开启多候选指纹时，**两边应当判「一致」**——候选集把两种发送形式都登记了。
+- 若判「有差异」，说明出现了候选集没覆盖的写法，差异里会点名是哪个块、多了/少了几条。
+- 想只看规则差异（不启用候选）：两边都加 `--no-candidates`。
+
 ## opencode v1 与 v2 的差别
 
 转换器读库表结构自动选规则，两条命令完全一样，不需要额外参数。
