@@ -841,6 +841,29 @@ MODELS_DEV_CANDIDATES = [
 ]
 
 
+def opencode_config_paths():
+    """所有可能含 provider 定义的配置，按可信度排序。
+
+    不能只看第一个存在的文件：设置了 $OPENCODE_CONFIG（OpenChamber 等会设）时，
+    那份托管配置里通常没有 provider 段，真正的 provider 在主配置里。
+    """
+    cands = ["~/.config/opencode/opencode.jsonc",
+             "~/.config/opencode/opencode.json",
+             os.environ.get("OPENCODE_CONFIG"),
+             "./opencode.jsonc",
+             "./opencode.json"]
+    seen, out = set(), []
+    for c in cands:
+        if not c:
+            continue
+        p = os.path.expanduser(c)
+        if p in seen or not os.path.exists(p):
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
 def fetch_models_dev(timeout=8.0):
     """本机没有 models.dev 快照时拉一次，存到 runtime/（失败返回 None，不影响转换）。"""
     import urllib.request
@@ -1041,7 +1064,11 @@ def main():
     for sid in sids:
         acp_path = args.acp or os.path.join(acp_dir, f"{sid}.json")
         provider = session_provider(db, sid)
-        proto, upstream = detect_wire(os.path.join(os.path.expanduser("~"), ".config", "opencode", "opencode.jsonc"), provider)
+        proto, upstream = "openai", ""
+        for cfg_path in opencode_config_paths():
+            proto, upstream = detect_wire(cfg_path, provider)
+            if upstream:
+                break
         protocol = args.protocol or proto
         up = args.upstream or upstream
         flat = args.flat
