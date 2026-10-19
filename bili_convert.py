@@ -585,11 +585,19 @@ def load_rows(db_path, sid):
     raise SystemExit("无法识别的库结构：既没有 session_message/session_v2，也没有 message/part")
 
 
+RUN_ISSUES = collections.defaultdict(list)
+
+
+def note_issue(kind, sid, detail=""):
+    RUN_ISSUES[kind].append((sid, detail))
+
+
 def convert(args):
     rows, mode = load_rows(args.db, args.sid)
     if not rows:
         print("  ✗ 库里已无该会话的消息（可能被 session-reaper 之类清理过）——只剩 acp 状态、"
               "没有原始内容，转换无意义，跳过（不写产物）")
+        note_issue("跳过：库里没有原始消息", args.sid)
         return "skip"
     wire = getattr(args, "wire", "") or ("1x" if mode == "v1" else "2x")
     fold_extra = [s.strip() for s in (getattr(args, "fold_providers", "") or "").split(",") if s.strip()]
@@ -1124,7 +1132,6 @@ def main():
             # loadSync 的候选里也显式含 flatFileNameFor(id)）→ 推不出上游时用扁平名，等效可用
             flat = True
             note = "  (上游推断不出 → flat 名)"
-            flat_used += 1
         print(f"\n=== {sid} ===")
         print(f"  acp      : {acp_path}")
         print(f"  provider : {provider or '(未知)'}  →  protocol={protocol}  upstream={up or '(未推断出)'}{note}")
@@ -1137,9 +1144,16 @@ def main():
                 skipped += 1
             else:
                 ok += 1
+                if not provider:
+                    note_issue("provider 未知（只能按 openai 协议猜）", sid)
         except Exception as e:
             failed += 1
             print(f"  转换失败: {type(e).__name__}: {e}")
+    produced = sorted(pathlib.Path(out).rglob("*.json")) if os.path.isdir(out) else []
+    flat_used = sum(1 for p_ in produced if re.fullmatch(r"[0-9a-f]{24}\.json", p_.name))
+    for p_ in produced:
+        if re.fullmatch(r"[0-9a-f]{24}\.json", p_.name):
+            note_issue("文件名是 flat 名（上游 origin 推断不出）", p_.name)
     print("\n=== 结论 ===")
     print(f"产物        : {ok} 个（已写到 {out}）")
     print(f"跳过        : {skipped} 个（库里没有原始消息，只剩 acp 状态 → 无内容可转）")
@@ -1154,6 +1168,23 @@ def main():
               f"{os.path.join(default_runtime_dir(), 'models-dev.json')} 后重跑本命令")
     print("下一步      : 用 bili_verify_all.py --install 校验并安装")
     print("                装完重启宿主机后，用 bili export | grep <sid> 确认 blocks（它直接读盘，不必先跑会话）")
+
+    if RUN_ISSUES:
+        print("\n=== 本次运行发现的问题 ===")
+        for kind, items in RUN_ISSUES.items():
+            print(f"[{kind}] {len(items)} 个")
+            for sid, detail in items[:5]:
+                print(f"    {sid}" + (f"  {detail}" if detail else ""))
+            if len(items) > 5:
+                print(f"    …… 其余 {len(items) - 5} 个同类")
+        print("\n=== 判定 ===")
+        if failed:
+            print(f"有失败：{failed} 个会话转换失败（见上），其余 {ok} 个产物可用")
+        elif ok == 0:
+            print("没有产出任何产物")
+        else:
+            print(f"可用（有降级/跳过）：{ok} 个产物已写出；{skipped} 个跳过；"
+                  f"{flat_used} 个用 flat 名")
     print("\n下一步（必须做）：用内容源把产物校验一遍，通过后再拷进 bili 的 sessions 目录：")
     print(f"  python3 bili_verify.py --acp <acp.json> --bili {out}/<protocol>/<host>_<hash>.json --db {db} --sid <sid>")
     return 0 if ok else 1

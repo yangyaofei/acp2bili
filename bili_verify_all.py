@@ -184,7 +184,30 @@ def main():
         print(f"跳过        : {len(skipped)} 个没有 acp 状态（没有压缩块或未隔离），未参与校验")
     print("待确认      : `bili export | grep <sid>` 能看到这些会话与 blocks=<块数>，才算真正生效")
     print("              （bili export 直接读盘，不必先跑会话；若看不到，先确认宿主已重启）")
-    print("\n=== 批量结论: " + ("全部通过 ✓" if not bad else f"{len(bad)} 个失败 ✗") + " ===")
+    problems = []
+    if bad:
+        problems.append(("校验失败", [x[0].name for x in bad]))
+    if skipped:
+        problems.append(("跳过（没有 acp 状态）", [x for x in skipped]))
+    if flat:
+        problems.append(("flat 名（上游 origin 未推断出）", [p.name for p, _ in items
+                                                          if re.match(r"^[0-9a-f]{24}\.json$", p.name)]))
+    if problems:
+        print("\n=== 本次运行发现的问题 ===")
+        for kind, names in problems:
+            print(f"[{kind}] {len(names)} 个")
+            for n in names[:5]:
+                print(f"    {n}")
+            if len(names) > 5:
+                print(f"    …… 其余 {len(names) - 5} 个同类")
+
+    if bad:
+        verdict = f"有失败：{len(bad)} 个产物未通过校验 ✗"
+    elif flat or skipped:
+        verdict = f"通过（有降级）：{len(ok)} 个通过并可用；降级项见上"
+    else:
+        verdict = f"全部正常 ✓（{len(ok)} 个通过）"
+    print("\n=== 批量结论: " + verdict + " ===")
     return 0 if not bad else 1
 
 
