@@ -1,5 +1,5 @@
 #!/bin/bash
-# acp2bili 完整性自检（v18）
+# acp2bili 完整性自检（v19）
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
@@ -11,7 +11,7 @@ FILES = [
     ("bili_wire_diff.py", 12391, "fb54a913e4eab5c02cdfeadb3d7d75ea", "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"),
     ("probe_residual.py", 3986, "ae5704282a4cd9943f6055644384747f", "1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749"),
     ("backup.sh", 4872, "1dd76dfd7f0d0ba67a0635684fc017a4", "7bc1cdffdc3d1b08c56f946d7a90b2c906b8d39ccaf7aeddc53f23b8a0492b5f"),
-    ("fork_state.py", 3902, "01b46a12fb91587d48ca2a9823d2fdab", "fe9699a51a3f780a6f5004e635801f6b35801669198832cab13cfeae3def0691"),
+    ("fork_state.py", 6786, "b299b282a762e5a29bd2a38ef9d0c1e2", "f0b5a78661cff28551c786892574e78a18bf41d8aaef05f39ba480cc7cddccd9"),
 ]
 bad = []
 for f, n, md5, sha in FILES:

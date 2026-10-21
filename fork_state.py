@@ -39,6 +39,51 @@ def state_path_for(sessions_dir, sid, protocol="openai", host_label=None):
     return pathlib.Path(sessions_dir) / protocol / name
 
 
+def trim_state(doc, present_ordered):
+    """只保留子会话里真实存在的覆盖：前缀分叉时，父块里超出分叉点的部分要裁掉。
+
+    present_ordered: 子会话按消息顺序算出来的 core id 列表
+                     （用 bili_convert.build_candidates 得到，顺序即消息顺序）。
+    返回 (doc, kept, dropped)。
+    """
+    state = doc["payload"]["state"]
+    blocks = state.get("blocks") or []
+    present = set(present_ordered)
+    kept, dropped = [], []
+    for b in blocks:
+        direct = [i for i in (b.get("directMessageIds") or []) if i in present]
+        eff0 = [i for i in (b.get("effectiveMessageIds") or []) if i in present]
+        if not direct and not eff0:
+            dropped.append(b)
+            continue
+        b["directMessageIds"] = direct
+        b["effectiveMessageIds"] = eff0 or direct
+        kept.append(b)
+    state["blocks"] = kept
+
+    # 编号按子会话顺序重排（父会话的编号可能包含子会话里不存在的消息）
+    covered = set()
+    for b in kept:
+        covered.update(b["directMessageIds"])
+        covered.update(b["effectiveMessageIds"])
+    by_raw = {}
+    ordered = [i for i in present_ordered if i in covered]
+    by_ref = {}
+    for n, cid in enumerate(ordered, 1):
+        ref = f"m{n:05d}"
+        by_raw[cid] = ref
+        by_ref[ref] = cid
+    state["messageRefs"] = {"byRaw": by_raw, "byRef": by_ref}
+    # 块的起止编号跟着重算
+    for b in kept:
+        ids = b["directMessageIds"] or b["effectiveMessageIds"]
+        if ids:
+            b["startRef"] = by_raw.get(ids[0], b.get("startRef", ""))
+            b["endRef"] = by_raw.get(ids[-1], b.get("endRef", ""))
+    state["nextBlockId"] = len(kept) + 1
+    return doc, len(kept), len(dropped)
+
+
 def main():
     ap = argparse.ArgumentParser(description="把父会话的 bili 状态复制给 fork 会话")
     ap.add_argument("--parent", required=True, help="父会话 id（ses_...）")
@@ -46,6 +91,8 @@ def main():
     ap.add_argument("--sessions-dir", default=default_sessions_dir(),
                     help="bili 会话目录（默认 ~/.local/share/billion-context/sessions）")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不写文件")
+    ap.add_argument("--trim-db", default="",
+                    help="按子会话的库裁剪：只保留子会话里真实存在的覆盖（前缀分叉必须加）")
     args = ap.parse_args()
 
     src = find_state(args.sessions_dir, args.parent)
@@ -70,6 +117,24 @@ def main():
     existing = find_state(args.sessions_dir, args.child)
     if existing:
         print(f"注意       : 子会话已有状态文件 {existing}，将被覆盖（原文件另存 .bak）")
+
+    if args.trim_db:
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import bili_convert as bc
+        rows, mode = bc.load_rows(args.trim_db, args.child)
+        if not rows:
+            raise SystemExit(f"库里没有子会话 {args.child} 的消息，无法裁剪")
+        cores, _ = bc.build_candidates(rows)
+        present_ordered = [c[0] for c in cores]
+        present = set(present_ordered)
+        existing_ids = set((state.get("messageRefs") or {}).get("byRaw") or {})
+        if present >= existing_ids:
+            print(f"裁剪       : 子会话 core={len(present)} 已覆盖父状态全部编号，无需裁剪")
+        else:
+            doc, kept, dropped = trim_state(doc, present_ordered)
+            print(f"裁剪       : 子会话 core={len(present)} / 父状态 {len(existing_ids)}；"
+                  f"保留块 {kept} 个，丢弃 {dropped} 个")
 
     if args.dry_run:
         print("dry-run    : 未写盘")

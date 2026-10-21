@@ -82,6 +82,15 @@ python3 fork_state.py --parent ses_父 --child ses_子 --dry-run   # 先看规�
 python3 fork_state.py --parent ses_父 --child ses_子            # 写入，重启宿主后生效
 ```
 
+**fork 是从中间分出来的（前缀）时必须加 `--trim-db`**：父状态里覆盖了子会话不存在的那部分消息，
+整份复制会全部退回原文（请求仍然超长）。加 `--trim-db <opencode.db>` 会按子会话真实存在的消息裁剪：
+
+```bash
+python3 fork_state.py --parent ses_父 --child ses_子 --trim-db ~/.local/share/opencode/opencode.db
+```
+
+输出会告诉你子会话 core 多少、保留多少块、丢弃多少块；编号按子会话顺序重排。
+
 注意：如果 fork 是从中间某个点分出来的，父会话里超出分叉点的块在子会话中不存在，
 会变成无害的无效编号（不影响使用，但不折叠那部分）；从末尾分叉出来最干净。
 
