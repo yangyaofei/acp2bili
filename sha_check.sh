@@ -1,5 +1,5 @@
 #!/bin/bash
-# acp2bili 完整性自检（v17）
+# acp2bili 完整性自检（v18）
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
@@ -11,20 +11,14 @@ FILES = [
     ("bili_wire_diff.py", 12391, "fb54a913e4eab5c02cdfeadb3d7d75ea", "b61c75adc0dd8cb4d4a2291248ddfd3b425e00b8a96e85efa518f493418bdf16"),
     ("probe_residual.py", 3986, "ae5704282a4cd9943f6055644384747f", "1b121d8eefeeac8bd580f5550fee9428ab392d8e213f8d566703e67500f27749"),
     ("backup.sh", 4872, "1dd76dfd7f0d0ba67a0635684fc017a4", "7bc1cdffdc3d1b08c56f946d7a90b2c906b8d39ccaf7aeddc53f23b8a0492b5f"),
+    ("fork_state.py", 3902, "01b46a12fb91587d48ca2a9823d2fdab", "fe9699a51a3f780a6f5004e635801f6b35801669198832cab13cfeae3def0691"),
 ]
 bad = []
 for f, n, md5, sha in FILES:
     b = pathlib.Path(f).read_bytes()
-    ok_n = len(b) == n
-    ok_md5 = hashlib.md5(b).hexdigest() == md5
-    ok_sha = hashlib.sha256(b).hexdigest() == sha
-    if ok_n and ok_md5 and ok_sha:
-        print(f'{f} ({n}B) md5+sha256 OK')
-    else:
-        bad.append(f)
-        s1 = 'OK' if ok_md5 else 'BAD'
-        s2 = 'OK' if ok_sha else 'BAD'
-        print(f'{f} MISMATCH: 字节 {len(b)}/{n}  md5 {s1}  sha256 {s2}')
-print('全部一致 ✓' if not bad else f'{len(bad)} 个不一致 ✗ —— 别跑，先 git pull 或重传')
+    ok = len(b) == n and hashlib.md5(b).hexdigest() == md5 and hashlib.sha256(b).hexdigest() == sha
+    print(f'{f} ({n}B) md5+sha256 ' + ('OK' if ok else 'MISMATCH'))
+    if not ok: bad.append(f)
+print('全部一致 ✓' if not bad else f'{len(bad)} 个不一致 ✗')
 sys.exit(0 if not bad else 1)
 PY
