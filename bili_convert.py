@@ -19,19 +19,24 @@
 - 内容源：把同一个会话导入 opencode 2.x 之后的库
   （老库的 message/part 也能用，只要表是 v1 的 `message`+`part`）
 
-## 身份模型（本次已用真实 wire 标定，diffs=0）
+## 身份模型（bili ≥0.1.202 的 canonical 规则，已用真实 wire 标定）
 
 bili 的 core id 是**内容哈希**，与宿主 id 无关：
 
-    core_id = "h_" + sha256(f"{role}|{contentType}|{toolCallId}|{toolName}|{text}")[:16]
+    core_id = "h_" + sha256(f"{role}|{contentType}||{toolName}|{text}")[:16]
+
+第三段恒为空：bili 0.1.202 起把 toolCallId 从 seed 移除，toolName 放在第四段。
+0.1.200 及更早是 `role|contentType|toolCallId|toolName|text`，两套 id 互不兼容
+（同一个 tool-call 会算出不同 id）。产物必须与目标 bili 的规则一致。
 
 按角色/类型展开：
 
     user        ("user","text", text)
     assistant   ("assistant","reasoning", 全部 reasoning 拼接)
                 ("assistant","text",      全部 text 拼接)
-                ("assistant","tool-call", json(args, 紧凑), {toolCallId, toolName})
-    tool        ("tool","tool-result", output, {toolCallId})     # 注意：不含 toolName
+                ("assistant","tool-call", json(args, 紧凑且键排序))
+    tool        ("tool","tool-result", output)
+                # tool-call 与 tool-result 的 seed 第四段都是 toolName
 
 四条容易踩的规则（都由真实 wire 反推）：
 
@@ -39,6 +44,19 @@ bili 的 core id 是**内容哈希**，与宿主 id 无关：
 2. **空 text/reasoning 不产生 core**（bili 侧有 `if (reasoning)` / `if (text)` 守卫）
 3. **报错工具结果**序列化成 `{"error":{...},"content":[...]}` 的 JSON，而不是错误文本
 4. 同一份身份在一趟里第 N 次出现要加 `_N` 后缀（ClusterCounter）
+
+tool-call 的 args 先按 bili 的 canonicalToolArgs 处理：能解析成 JSON 就递归按键排序、
+按 JS 的规则紧凑序列化，再参与哈希；产物里保留 wire 原文。图片消息会另带 mediaFingerprint
+后缀，本工具暂不覆盖。
+
+## 版本与自检
+
+编号规则不是永久不变的：bili 0.1.202 改过一次，按旧规则转的产物全部失效。所以：
+
+- 转换和校验一开始都跑 `selftest_ids()`：拿 bili 0.1.216 自己算出的编号对照本文件，
+  不一致就停。
+- 结论里有一行 `bili 版本`：不在已验证范围（`BILI_ID_RULE_VERSIONS`）时会明确提示。
+- bili 升级后第一次用，先用 `bili_wire_filter.py` 按 bili 实际见过的编号核对一遍。
 
 ## 与 acp 的语义差异
 
@@ -62,10 +80,241 @@ import time
 from urllib.parse import urlparse
 
 
+# bili 把 seed 按 Node 的 utf8 变成字节再哈希。JS 字符串是 UTF-16：成对的高低代理项是一个
+# 字符（emoji），孤立的代理项（残缺的 emoji 等）Node 会换成 U+FFFD。Python 的 str 以码点
+# 为单位，孤立的代理项码点 str.encode() 会直接抛 UnicodeEncodeError，所以这里先做同样的
+# 处理，结果才逐字节一致（bili 0.1.216 实测："bad \ud83d end" 与 "bad \ufffd end" 的 id 相同）。
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+_SURROGATE_PAIR = re.compile(r"[\ud800-\udbff][\udc00-\udfff]")
+
+
+def _merge_surrogate_pair(m):
+    return chr(0x10000 + ((ord(m.group(0)[0]) - 0xD800) << 10) + (ord(m.group(0)[1]) - 0xDC00))
+
+
+def _merge_pairs(text):
+    """把相邻的高、低代理项码点合并成一个字符（与 JS 的 UTF-16 语义一致）。"""
+    if not text or not _SURROGATE.search(text):
+        return text or ""
+    return _SURROGATE_PAIR.sub(_merge_surrogate_pair, text)
+
+
+def utf8_safe(text):
+    """孤立代理项换成 U+FFFD，使其与 bili 的哈希输入一致、能按 UTF-8 写盘。"""
+    merged = _merge_pairs(text)
+    if not _SURROGATE.search(merged):
+        return merged
+    return _SURROGATE.sub("\ufffd", merged)
+
+
+def json_safe(value):
+    """递归处理 list / dict / str，其余原样返回。写产物前过一遍，文件才是合法的 UTF-8。"""
+    if isinstance(value, str):
+        return utf8_safe(value)
+    if isinstance(value, list):
+        return [json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {utf8_safe(k): json_safe(v) for k, v in value.items()}
+    return value
+
+
 def derive(role, ct, text, tcid="", tname=None):
-    """bili 的 core id（与 kernel `deriveMessageId` 逐字节一致）。"""
-    seed = f"{role}|{ct}|{tcid}|{tname or ''}|{text}"
-    return "h_" + hashlib.sha256(seed.encode()).hexdigest()[:16]
+    """bili 的 core id（与 kernel `deriveCanonicalMessageId` 逐字节一致）。
+
+    bili 0.1.202 起 seed = `[idSalt|]role|contentType||toolName|text`
+    （+ 图片的 `|mediaFingerprint`）：toolCallId 不再参与，第三段恒为空。
+    参数 tcid 保留只为调用方兼容，不再进入 seed。
+    """
+    seed = f"{role}|{ct}||{tname or ''}|{text}"
+    return "h_" + hashlib.sha256(utf8_safe(seed).encode()).hexdigest()[:16]
+
+
+# ── bili `canonicalToolArgs` 的 Python 版 ────────────────────────────────────
+# bili：JSON.stringify(canonicalize(JSON.parse(args.trim())))，解析失败则原样返回。
+# Python 的 json 模块有三处行为不同，必须逐条对齐，否则同一个工具调用会算出不同 id：
+#   1. 数字按 JS 的 String(number) 打印：1.0 → "1"、1E2 → "100"、1e-7 → "1e-7"（不补零）、
+#      1e20 → "100000000000000000000"（指数不超过 21 用定点）；超出双精度的整数先按双精度取整。
+#   2. 对象键：数组下标形式的键（"1"、"2"、"10"）按数值升序排在最前，其余按 UTF-16 码元排序。
+#      Python 按码点排序会把 😀 排到 \ue000 之后，JS 相反。
+#   3. 字符串里的孤立代理项输出成 \udXXX 转义。
+# NaN / Infinity 不是合法 JSON，JSON.parse 会失败并原样返回，所以解析时直接拒绝。
+# 以上每一条都有 bili 0.1.216 自己算出的对照样例，见 tests/test_ids.py。
+_JS_TRIM = "".join(chr(c) for c in (
+    9, 10, 11, 12, 13, 32, 160, 0x1680, *range(0x2000, 0x200b),
+    0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff))
+
+
+def _js_number(n):
+    """JS 的 `String(number)`：JSON.stringify 打印数字用的就是它。"""
+    try:
+        x = float(n)
+    except OverflowError:               # 超出双精度的整数字面量：JS 得到 ±Infinity，输出 "null"
+        return "null"
+    if x != x or x in (float("inf"), float("-inf")):
+        return "null"
+    sign = "-" if x < 0 else ""
+    mant, _, exp = repr(abs(x)).partition("e")      # repr 给的是最短往返十进制，与 JS 相同
+    whole, _, frac = mant.partition(".")
+    all_digits = whole + frac
+    digits = all_digits.strip("0")
+    if not digits:
+        return "0"
+    k = len(digits)
+    # n 是十进制指数：数值 = digits × 10^(n-k)
+    n = len(whole) - (len(all_digits) - len(all_digits.lstrip("0"))) + (int(exp) if exp else 0)
+    if k <= n <= 21:
+        return sign + digits + "0" * (n - k)
+    if 0 < n <= 21:
+        return sign + digits[:n] + "." + digits[n:]
+    if -6 < n <= 0:
+        return sign + "0." + "0" * -n + digits
+    e = n - 1
+    return (sign + (digits if k == 1 else digits[0] + "." + digits[1:])
+            + "e" + ("+" if e >= 0 else "-") + str(abs(e)))
+
+
+def _js_string(s):
+    """JSON.stringify 对字符串的输出。json.dumps 的转义与它一致，只差孤立代理项。"""
+    out = json.dumps(_merge_pairs(s), ensure_ascii=False)
+    return _SURROGATE.sub(lambda m: "\\u%04x" % ord(m.group()), out)
+
+
+def _js_json(value):
+    """JSON.stringify 的 Python 版，只覆盖 JSON 值（None / bool / 数字 / str / list / dict）。"""
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)):
+        return _js_number(value)
+    if isinstance(value, str):
+        return _js_string(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_js_json(v) for v in value) + "]"
+    # 键的顺序：JSON.stringify 先按数值升序输出数组下标形式的键（"2" 排在 "10" 前），
+    # 再按插入顺序输出其余键（canonicalize 已按 UTF-16 码元排好）。
+    def _is_index(k):
+        return (k.isascii() and k.isdigit() and (k == "0" or not k.startswith("0"))
+                and int(k) < 2 ** 32 - 1)
+
+    keys = (sorted((k for k in value if _is_index(k)), key=int)
+            + sorted((k for k in value if not _is_index(k)),
+                     key=lambda k: k.encode("utf-16-be", "surrogatepass")))
+    return "{" + ",".join(_js_string(k) + ":" + _js_json(value[k]) for k in keys) + "}"
+
+
+def _reject_json_constant(_name):
+    raise ValueError("NaN / Infinity 不是合法 JSON")
+
+
+def canonical_tool_args(args_text):
+    """bili kernel 的 `canonicalToolArgs`：JSON 文本 → 键递归排序 + 按 JS 规则紧凑序列化。
+
+    tool-call 的 core id 用规范形态参与哈希（wire 原文保留给消息体）。
+    不以 `{`/`[` 开头或解析失败时原样返回（与 kernel 一致）。
+    """
+    trimmed = args_text.strip(_JS_TRIM)
+    if not trimmed.startswith(("{", "[")):
+        return args_text
+    try:
+        value = json.loads(trimmed, parse_constant=_reject_json_constant)
+    except (ValueError, TypeError):
+        return args_text
+    return _js_json(value)
+
+
+# 编号自检样例。期望值不是本文件算的，是 bili 0.1.216 自己的 deriveCanonicalMessageId 对
+# 同样的输入算出来的（生成方法见 tests/test_ids.py）。转换和校验一开始都会跑一遍：
+# 不过就停，因为这时的产物整体不可用。
+ID_SELFTEST = (
+    # ((role, contentType, text, toolName), core id)；tool-call 的 text 是未规范化的 args 原文
+    (("user", "text", "hello", None), "h_2708c80e9ecf5970"),
+    (("user", "text", "你好，世界 🌍！", None), "h_e1696a25f9aed5fd"),
+    (("assistant", "reasoning", "先想一下\n再回答", None), "h_b8ef3fb2cfa95985"),
+    (("assistant", "text", "line1\nline2\t\"q\"\x01\x7f\u2028", None), "h_6a27b6116f68554d"),
+    (("assistant", "tool-call", '{"z":1,"a":{"y":[3,{"b":2,"a":1}],"x":null},"m":"中文 é ü"}}', "bash"),
+     "h_cdcbde4f27fb2723"),
+    (("tool", "tool-result", "ok: 42\n", "bash"), "h_241727766b3d6fbe"),
+    (("user", "text", "bad \ud83d end", None), "h_81e606bf385604ec"),
+    (("assistant", "tool-call", '{"a":1.0,"b":1E2,"f":1e-7,"u":1e20,"k":"bad \\ud83d end"}', "t"),
+     "h_283367019b28d5d3"),
+)
+
+
+def selftest_ids():
+    """核对 derive / canonical_tool_args 与 bili 0.1.216 逐字节一致。返回失败说明（空 = 通过）。"""
+    bad = []
+    for (role, ct, text, tname), want in ID_SELFTEST:
+        got = derive(role, ct, canonical_tool_args(text) if ct == "tool-call" else text, "", tname)
+        if got != want:
+            bad.append(f"{role}/{ct} {text[:40]!r}：算出 {got}，bili 是 {want}")
+    return bad
+
+
+# 编号规则用真实请求验证过的 bili 版本范围。超出范围时不要直接装产物：
+# 0.1.202 改过一次规则，之前转的产物全部失效，而当时的校验器查不出来。
+BILI_ID_RULE_VERSIONS = ("0.1.202", "0.1.216")
+
+
+def _version_tuple(text):
+    parts = []
+    for piece in re.split(r"[.+-]", text or ""):
+        if not piece.isdigit():
+            break
+        parts.append(int(piece))
+    return tuple(parts)
+
+
+def bili_version_status(probe_http=True, timeout=1.5):
+    """检测实际在用的 bili 版本。返回 (版本或 None, 判定)。
+
+    判定：old = 早于编号规则的起点；ok = 在已验证范围内；new = 比已验证的最新版本还新；
+    unknown = 没检测到 bili。
+    先问本机代理的 /__bili/health（最准：它就是收产物的那一个），probe_http=False 时不问；
+    再找 opencode 替它装的副本（~/.cache/opencode/npm/billion-context@latest/*/）。
+    """
+    ver = None
+    if probe_http:
+        import urllib.request
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open("http://127.0.0.1:18787/__bili/health", timeout=timeout) as r:
+                ver = json.loads(r.read(4096).decode("utf-8", "replace")).get("version")
+        except Exception:
+            ver = None
+    if not ver:
+        root = os.path.expanduser("~/.cache/opencode/npm/billion-context@latest")
+        try:
+            copies = sorted(pathlib.Path(root).glob("*/node_modules/billion-context/package.json"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+            for p in copies:
+                ver = json.loads(p.read_text(encoding="utf-8")).get("version")
+                if ver:
+                    break
+        except Exception:
+            ver = None
+    if not ver:
+        return None, "unknown"
+    lo, hi = (_version_tuple(v) for v in BILI_ID_RULE_VERSIONS)
+    got = _version_tuple(ver)
+    return ver, ("old" if got < lo else "new" if got > hi else "ok")
+
+
+def bili_version_note():
+    """结论块里的一行：当前 bili 版本相对编号规则的已验证范围处在什么位置。"""
+    ver, status = bili_version_status()
+    lo, hi = BILI_ID_RULE_VERSIONS
+    if status == "unknown":
+        return "bili 版本    : 未检测到（没有在跑的代理，也没找到 opencode 装的 bili）——装产物前先确认版本"
+    if status == "old":
+        note_issue("bili 版本早于编号规则的起点，产物装不上", f"bili {ver} < {lo}")
+        return f"bili 版本    : ✗ {ver} 早于 {lo}：本脚本产出的是新编号规则，装不上。先升级 bili"
+    if status == "new":
+        return (f"bili 版本    : ⚠ {ver} 比已验证的 {hi} 新：编号规则可能又变过"
+                f"（0.1.202 那次让旧产物全部失效）。装之前先用真实请求核对，见 bili_wire_filter.py")
+    return f"bili 版本    : {ver}，在编号规则的已验证范围 {lo}–{hi} 内 ✓"
 
 
 # ── opencode 1.x 的两种 wire 形态（用老机 1.19.0 的真实请求体标定） ──────────
@@ -202,8 +451,12 @@ def build_cores(rows, wire="2x", fold_providers=None, rc_providers=None,
         reasoning = "".join(r_parts)
         text = "".join(t_parts)
         tools = [p for p in content if p.get("type") == "tool"]
-        prov = (m.get("providerID") or "").strip()
-        model_id = (m.get("modelID") or "").strip()
+        # v2 的 session_message.data 把模型放在 `model` 子对象里：
+        #   {"model":{"providerID":"zhipuai-coding-plan","id":"glm-5.3"}}
+        # v1 的 message.data 是平铺的 providerID/modelID。两种都认。
+        model_ref = m.get("model") or {}
+        prov = (m.get("providerID") or model_ref.get("providerID") or "").strip()
+        model_id = (m.get("modelID") or model_ref.get("id") or "").strip()
         if wire == "2x":
             fold = False
         else:
@@ -237,7 +490,9 @@ def build_cores(rows, wire="2x", fold_providers=None, rc_providers=None,
         for x in tools:
             st = x.get("state") or {}
             args = json.dumps(st.get("input") or {}, separators=(",", ":"), ensure_ascii=False)
-            push(derive("assistant", "tool-call", args, x.get("id", ""), x.get("name")),
+            # id 用 canonical 形态；消息体保留 wire 原文
+            push(derive("assistant", "tool-call", canonical_tool_args(args),
+                        x.get("id", ""), x.get("name")),
                  mid, "assistant", "tool-call", x.get("id", ""), x.get("name"), args)
         for x in tools:
             st = x.get("state") or {}
@@ -253,7 +508,8 @@ def build_cores(rows, wire="2x", fold_providers=None, rc_providers=None,
                 err = st.get("error")
                 msg = err.get("message") if isinstance(err, dict) else (err if isinstance(err, str) else "")
                 out = msg or "[Tool execution was interrupted]"
-            push(derive("tool", "tool-result", out, x.get("id", "")),
+            # canonical 规则：tool-result 的 seed 第四段也带 toolName
+            push(derive("tool", "tool-result", out, "", x.get("name")),
                  mid, "tool", "tool-result", x.get("id", ""), x.get("name"), out)
     return cores, cores_of_msg
 
@@ -308,21 +564,14 @@ def build_candidates(rows):
 
         seen = set()                     # 同一消息内去重
 
-        def push1(role, ct, tcid, tname, txt):
+        def push1(role, ct, tcid, tname, txt, seed_text=None):
             k = (role, ct, tcid or "", tname or "", txt)
             if k in seen:
                 return
             seen.add(k)
-            # seed 参数与内核标定严格一致：
-            #   tool-call    → derive(role, ct, text, toolCallId, toolName)  5 参
-            #   tool-result  → derive(role, ct, text, toolCallId)            4 参（不带 toolName）
-            #   其余         → derive(role, ct, text)                        3 参
-            if ct == "tool-call":
-                base = derive(role, ct, txt, tcid or "", tname)
-            elif ct == "tool-result":
-                base = derive(role, ct, txt, tcid or "")
-            else:
-                base = derive(role, ct, txt)
+            # seed 与内核一致：第三段（toolCallId）为空，第四段是 toolName。
+            # tool-call 的 args 用 canonical 形态参与哈希，消息体保留原文。
+            base = derive(role, ct, txt if seed_text is None else seed_text, tcid, tname)
             push(base, mid, role, ct, tcid, tname, txt)
 
         # 候选 1：fold —— 1.x 无开关组合，reasoning 直接拼进 content（实测分隔符=空串）
@@ -341,7 +590,8 @@ def build_candidates(rows):
         for x in tools:
             st = x.get("state") or {}
             args = json.dumps(st.get("input") or {}, separators=(",", ":"), ensure_ascii=False)
-            push1("assistant", "tool-call", x.get("id", ""), x.get("name"), args)
+            push1("assistant", "tool-call", x.get("id", ""), x.get("name"), args,
+                  seed_text=canonical_tool_args(args))
         # 工具结果：completed 单一指纹；非 completed 三候选
         #   v1-错误文本 / v1-占位串（无文本、被中断、未跑完）/ v2-JSON 包裹
         for x in tools:
@@ -421,7 +671,7 @@ def cores_from_dump(dump_path, rows):
     used = set()           # (锚点串, mid)：同一宿主消息可锚多个不同串（R/T/tool 各自一条）
     row_order = {mid: i for i, (mid, _, _) in enumerate(rows)}
     last = {"pos": 0}      # 顺序先验：与 bili 的 order-centric 对账同思想
-    tc_name = {}          # call_id -> 工具名（展示用；tool-result 的 seed 不带它）
+    tc_name = {}          # call_id -> 工具名（tool-result 的 seed 也用它，与内核一致）
 
     def anchor(key, cands):
         best, bestd = None, None
@@ -490,7 +740,9 @@ def cores_from_dump(dump_path, rows):
                 args = fn.get("arguments") or ""
                 k = tc.get("id") or ""
                 tc_name[k] = fn.get("name") or ""
-                push(derive("assistant", "tool-call", args, k, fn.get("name")),
+                # 与内核一致：id 用 canonical args，消息体保留 wire 原文
+                push(derive("assistant", "tool-call", canonical_tool_args(args),
+                            k, fn.get("name")),
                      mid, "assistant", "tool-call", k, fn.get("name"), args)
         elif role == "tool":
             t = scontent(m.get("content"))
@@ -498,8 +750,8 @@ def cores_from_dump(dump_path, rows):
             mid = tool_idx.get(tcid)
             if mid is None:
                 stats["tool-result 未锚定"] += 1
-            # 与 build_cores/内核标定一致：tool-result 的 seed 只带 toolCallId，不带 toolName
-            push(derive("tool", "tool-result", t, tcid),
+            # 与内核一致：tool-result 的 seed 第四段带 toolName
+            push(derive("tool", "tool-result", t, "", tc_name.get(tcid)),
                  mid, "tool", "tool-result", tcid, tc_name.get(tcid), t)
         else:
             stats[f"未知 role:{role}"] += 1
@@ -796,7 +1048,7 @@ def convert(args):
                   "compressCreditTokens": 0},
         "messages": messages,
         "messagesFolded": True,
-        "metadata": {"conversion": method},
+        "metadata": {"conversion": method, "idScheme": "canonical-0.1.202"},
         "state": {
             "blocks": blocks,
             "messageRefs": {"byRaw": ref_of_core, "byRef": core_of_ref},
@@ -835,7 +1087,8 @@ def convert(args):
     if getattr(args, "dry_run", False):
         print("dry-run      : 未写产物")
     else:
-        target.write_text(json.dumps(doc, ensure_ascii=False))
+        # 文本里可能有孤立代理项（残缺的 emoji），不处理会写不出合法的 UTF-8
+        target.write_text(json.dumps(json_safe(doc), ensure_ascii=False))
 
     print(f"cores        : {len(cores)}")
     print(f"blocks       : {len(blocks)} (active {sum(1 for b in blocks if b['active'])})")
@@ -1149,6 +1402,13 @@ def main():
     args = p.parse_args()
     args.acp_dir_given = any(a == "--acp-dir" or a.startswith("--acp-dir=") for a in sys.argv[1:])
 
+    bad = selftest_ids()
+    if bad:
+        print("✗ 编号自检失败：本脚本的编号算法与 bili 0.1.216 不一致，转出来的产物不可用")
+        for b in bad:
+            print(f"    {b}")
+        return 2
+
     data_dir = args.data_dir or default_data_dir()
     db = args.db or os.path.join(data_dir, "opencode.db")
     acp_dir = args.acp_dir or os.path.join(data_dir, "storage", "plugin", "acp")
@@ -1318,6 +1578,7 @@ def main():
                                       else f"（已写到 {out}）"))
     print(f"跳过        : {skipped} 个（库里没有原始消息，只剩 acp 状态 → 无内容可转）")
     print(f"失败        : {failed} 个")
+    print(bili_version_note())
     if flat_used:
         print(f"上游 origin : {flat_used} 个推断不出 → 用 flat 名 <hash>.json")
         print(f"  影响      : bili 接受这种文件名，功能不受影响；只是文件名少了 host 前缀")

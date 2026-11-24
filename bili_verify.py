@@ -29,7 +29,14 @@ B 组（需要 --db：把内容重算一遍，这是"产物对不对"的硬校�
   B3 尾段一致                   payload.messages == 未被 active 块覆盖的 core，顺序一致
   B4 汇总一致                   cores / blocks / refs / tail 四个数字两侧对得上
 
-退出码：0 = 全通过；1 = 有失败项（打印每一项的证据）
+退出码：0 = 全通过；1 = 有失败项（打印每一项的证据）；2 = 编号自检失败（结果不可信）
+
+## 与转换器同源的局限
+
+B 组是用 bili_convert.py 的算法把 core 重算一遍再比。算法错了，两边一起错，照样 PASS
+（bili 0.1.202 改编号规则时就是这样漏过去的）。所以开头先跑 selftest_ids()：拿 bili 自己
+算出的编号对照算法本身。它只能证明"算法与 bili 0.1.216 一致"；bili 升级后规则是否又变，
+要用 bili_wire_filter.py 按真实请求核对。
 """
 import argparse
 import collections
@@ -41,7 +48,8 @@ import sys
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from bili_convert import build_cores, build_candidates, load_rows, cores_from_dump  # noqa: E402
+from bili_convert import (build_cores, build_candidates, load_rows, cores_from_dump,  # noqa: E402
+                          selftest_ids, bili_version_status, BILI_ID_RULE_VERSIONS)
 
 REF_RE = re.compile(r"^m\d{5}$")
 BLOCK_RE = re.compile(r"^b[1-9]\d*$")
@@ -74,6 +82,15 @@ def main():
     ap.add_argument("--from-dump", dest="dump", default="",
                     help="bili 的 INCOMING 转储：B 组改用测量法重算（与 --from-dump 转换的产物配套）")
     args = ap.parse_args()
+
+    # 先确认编号算法本身没走样。B 组是用 bili_convert.py 的算法重算一遍再比，转换器和校验器
+    # 同源：算法错了两边一起错，照样 PASS（bili 0.1.202 改编号规则时就是这样漏过去的）。
+    bad = selftest_ids()
+    check("编号自检（与 bili 0.1.216 自己算出的编号逐字节一致）", not bad,
+          f"{len(bad)} 条不一致，例如 {bad[0]}" if bad else "")
+    if bad:
+        print("\n=== 校验结论: 编号自检失败，下面的结果不可信，不做 ✗ ===")
+        return 2
 
     acp = json.load(open(args.acp))
     bili = json.load(open(args.bili))
@@ -255,10 +272,27 @@ def main():
         ordered = [c[0] for c in cores]
         ref_in_order = [by_ref[r] for r in sorted(by_ref, key=lambda r: int(r[1:]))]
 
-        b1 = ordered == ref_in_order
-        det = "" if b1 else f"首个差异位 {next(i for i,(x,y) in enumerate(zip(ordered, ref_in_order)) if x!=y)}" \
-                           f"（重算 {len(ordered)} vs 账本 {len(ref_in_order)}）"
-        check("B1 core 逐位重算一致（含顺序、含重复 _N 后缀）", b1, det)
+        # 经 bili_wire_filter.py 过滤的产物只含 bili 实际见过的编号：账本是重算结果的有序子集，
+        # 块覆盖、尾段也相应是子集。仍然要求文件里的每个编号都重算得出来、顺序不变。
+        filtered = bool((payload.get("metadata") or {}).get("wireFilter"))
+        if filtered:
+            print(f"  (按 bili 实际见过的编号过滤过：{payload['metadata']['wireFilter']}；B 组按有序子集比对)")
+
+        if filtered:
+            place = {cid: i for i, cid in enumerate(ordered)}
+            missing = [c for c in ref_in_order if c not in place]
+            places = [place[c] for c in ref_in_order if c in place]
+            b1 = not missing and places == sorted(places)
+            det = (f"账本 {len(ref_in_order)} 条里有 {len(missing)} 条重算不出来，例如 {missing[0]}" if missing
+                   else "" if b1 else "账本顺序与重算结果不一致")
+            check("B1 账本是重算结果的有序子集（过滤产物）", b1, det)
+        else:
+            b1 = ordered == ref_in_order
+            # 一方是另一方的前缀时 zip 里找不到差异位，差异位就是较短一方的长度
+            first = next((i for i, (x, y) in enumerate(zip(ordered, ref_in_order)) if x != y),
+                         min(len(ordered), len(ref_in_order)))
+            det = "" if b1 else f"首个差异位 {first}（重算 {len(ordered)} vs 账本 {len(ref_in_order)}）"
+            check("B1 core 逐位重算一致（含顺序、含重复 _N 后缀）", b1, det)
 
         b2 = True; why = []
         dropped_total = 0
@@ -278,16 +312,17 @@ def main():
             want = with_cores(a.get("directMessageIds") or [])
             dropped_total += len(a.get("directMessageIds") or []) - len(want)
             got = {core_to_msg[c] for c in b.get("directMessageIds", []) if c in core_to_msg}
-            if want != got:
+            if not ((got <= want) if filtered else (got == want)):
                 b2 = False
                 why.append(f"b{key} direct 覆盖消息不一致（应有 {len(want)} vs 实际 {len(got)}，"
                            f"差集 {sorted(want ^ got)[:2]}）")
             want_e = with_cores(a.get("effectiveMessageIds") or [])
             got_e = {core_to_msg[c] for c in b.get("effectiveMessageIds", []) if c in core_to_msg}
-            if want_e != got_e:
+            if not ((got_e <= want_e) if filtered else (got_e == want_e)):
                 b2 = False
                 why.append(f"b{key} effective 覆盖消息不一致（差集 {len(want_e ^ got_e)}）")
-        check("B2 逐块覆盖集合与 acp 一致（direct + effective）", b2, "；".join(why[:3]))
+        check("B2 逐块覆盖集合与 acp 一致" + ("（过滤产物：子集）" if filtered else "") + "（direct + effective）",
+              b2, "；".join(why[:3]))
         if dropped_total:
             print(f"  [INFO] 另有 {dropped_total} 处「消息条数」差异，来自内容为空的消息"
                   f"（bili 侧不产生 core，语义等价）")
@@ -297,15 +332,28 @@ def main():
             if b.get("active"):
                 covered |= set(b.get("effectiveMessageIds", []))
         want_tail = [c[0] for c in cores if c[0] not in covered]
+        if filtered:                      # 被 bili 过滤掉的编号不在账本里，尾段同样只比子集
+            want_tail = [c for c in want_tail if c in by_raw]
         got_tail = [m.get("id") for m in payload.get("messages", [])]
         check("B3 尾段 = 未被 active 覆盖的 core，且顺序一致", want_tail == got_tail,
               f"重算 {len(want_tail)} vs 文件 {len(got_tail)}")
 
-        b4 = (len(cores) == len(by_ref)
+        # 过滤产物的账本只会比重算结果少；多出来就是有编号不是重算得来的
+        ledger_ok = len(by_ref) <= len(cores) if filtered else len(cores) == len(by_ref)
+        b4 = (ledger_ok
               and len(blocks) == len(ablocks)
               and len(payload.get("messages", [])) == len(want_tail))
         check("B4 汇总数字一致（cores/blocks/tail）", b4,
               f"cores {len(cores)}/{len(by_ref)} blocks {len(blocks)}/{len(ablocks)} tail {len(payload.get('messages', []))}/{len(want_tail)}")
+
+    # 编号规则只在 BILI_ID_RULE_VERSIONS 范围内用真实请求验证过。这里只看磁盘上的 bili 副本，
+    # 不发网络请求（本校验器约定不碰网络）。
+    ver, status = bili_version_status(probe_http=False)
+    lo, hi = BILI_ID_RULE_VERSIONS
+    if status == "old":
+        check(f"bili 版本不早于 {lo}（编号规则的起点）", False, f"检测到 bili {ver}，产物装不上")
+    elif status == "new":
+        warn(f"bili {ver} 比已验证的 {hi} 新：编号规则可能变过，PASS 不代表在它上面生效")
 
     print()
     verdict = "全部通过 ✓" if not FAILS else f"有 {len(FAILS)} 项失败 ✗"

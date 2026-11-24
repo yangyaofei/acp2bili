@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """判掉 acp2bili 对账的最后残差：逐条给出源头消息的形状与"换个 id 的同文本"。
-用法：cd ~/opencode/acp2bili && python3 probe_residual.py [SID]"""
+用法：cd ~/opencode/acp2bili && python3 probe_residual.py <SID> [<opencode.db>]"""
 import collections, json, os, sys, pathlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bili_convert as B, bili_wire_diff as D
 
-SID = sys.argv[1] if len(sys.argv) > 1 else "ses_ee1380254ffeqiEp31YnVVFDFk"
+if len(sys.argv) < 2:
+    raise SystemExit("用法：python3 probe_residual.py <SID> [<opencode.db>]")
+SID = sys.argv[1]
 DB = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser("~/.local/share/opencode/opencode.db")
 WIRE_ROOT = os.environ.get("PROBE_WIRE_ROOT", "~/.local/state/billion-context")
 wire_path, kind = D.find_dump(pathlib.Path(os.path.expanduser(WIRE_ROOT)), SID)

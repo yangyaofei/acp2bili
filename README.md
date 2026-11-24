@@ -6,12 +6,35 @@
 
 | | opencode-acp | billion-context |
 |---|---|---|
-| 消息身份 | 宿主原生 id（`msg_…`） | 内容哈希 `h_<sha256[:16]>`（`role\|contentType\|toolCallId\|toolName\|text`） |
+| 消息身份 | 宿主原生 id（`msg_…`） | 内容哈希 `h_<sha256[:16]>`（`role\|contentType\|toolName\|text`，第三段恒为空；见「bili 版本与编号规则」） |
 | ref 账本 | `messageIds.byRawId/byRef`（`mNNNNN`） | `state.messageRefs.byRaw/byRef`（`mNNNNN`，同格式不同键空间） |
 | 压缩块 | `blocksById`（数字 id，tier1/2/3） | `state.blocks`（字符串 id，`directMessageIds/directBlockIds`） |
 | 存放 | `~/.local/share/opencode/storage/plugin/acp/<sid>.json` | `~/.local/share/billion-context/sessions/<protocol>/<host>_<sha256(sid)[:24]>.json` |
 
 转换 = **按 bili 的算法重算每条消息的 `h_` 身份 → 重排 ref → 把 acp 的块映射成 bili 的块**。原始对话永远在 opencode 自己的库里，本工具只新增 bili 状态文件，**不改 opencode 的任何数据**；删掉产物即回到未迁移状态。
+
+## bili 版本与编号规则
+
+bili 给每条消息算的编号是内容哈希，算法随版本变过。**0.1.202 起 toolCallId 不再参与、toolName 换了位置**：按旧规则转的产物在它上面整体失效（块全部对不上，历史原样发出，大会话直接超窗）。本仓库按 0.1.202–0.1.216 的规则实现，并用真实请求验证过。
+
+脚本自带三道检查：
+
+| 检查 | 在哪 | 行为 |
+|---|---|---|
+| 编号自检 | 转换、校验一开始 | 拿 bili 0.1.216 自己算出的编号对照算法（`selftest_ids()`），不一致立即退出 |
+| 版本提示 | 转换的结论块、校验的结尾 | bili 不在已验证范围（`BILI_ID_RULE_VERSIONS`）时明确提示 |
+| 真实请求核对 | `bili_wire_filter.py` | 只保留 bili 实际见过的编号；保留比例很低，说明规则又变了 |
+
+bili 升级后第一次用，在常规流程之外多做一步：
+
+```bash
+# 1. 让宿主对会话发一次请求（请求失败也没关系，bili 会记下它看到的编号）
+# 2. 照常转换、校验
+# 3. 按 bili 实际见过的编号过滤，再校验过滤后的产物（B 组按有序子集比对）
+python3 bili_wire_filter.py --product runtime/out/<protocol>/<host>_<hash>.json --out runtime/out-wire
+python3 bili_verify.py --acp runtime/acp-state/<sid>.json \
+  --bili runtime/out-wire/<protocol>/<host>_<hash>.json --db <opencode.db> --sid <sid>
+```
 
 ## 依赖
 
@@ -23,12 +46,14 @@
 | 文件 | 作用 |
 |---|---|
 | `bili_convert.py` | 转换器。`--auto --all` 批量 / `--auto --sid <sid>` 单会话；自动定位数据目录、库、acp 目录；从 `~/.config/opencode/opencode.jsonc` + models.dev 快照推断 protocol/upstream，推不出时用扁平名（bili 明确接受） |
-| `bili_verify.py` | 单产物离线校验：A 组结构（信封/文件名/ref 账本/块结构/折叠一致性/与 acp 块级对应）+ B 组内容（core 逐位重算、逐块覆盖、尾段、汇总） |
+| `bili_verify.py` | 单产物离线校验：开头先做编号自检，再查 A 组结构（信封/文件名/ref 账本/块结构/折叠一致性/与 acp 块级对应）+ B 组内容（core 逐位重算、逐块覆盖、尾段、汇总）；经 `bili_wire_filter.py` 过滤的产物按有序子集比对 |
 | `bili_verify_all.py` | 批量校验 + `--install` 只装全 PASS 的产物到 bili sessions 目录（同名先备份 `.bak`） |
+| `bili_wire_filter.py` | 按 bili 实际见过的编号过滤产物（只读 bili 的库）；bili 升级后用它核对编号规则 |
 | `bili_wire_diff.py` | 取证：把真实请求转储折成 core，与我们的账本逐位比，按类（角色×内容类型）给差异样本；`--try-rules` 可对比多种形态规则 |
 | `probe_residual.py` | 残差取证：对对不上的 core 打印源消息形状（parts/status/provider） |
 | `backup.sh` | 一站式备份到 `runtime/backup/<时间戳>_<主机>/`：opencode 库三件套+配置+acp 状态+bili 会话+迁移产物；`--full` 加整个 storage 与 cache。还原步骤见脚本头注释与 MANIFEST.txt |
 | `sha_check.sh` | 核对本机脚本是否当前版本（md5+sha256+字节） |
+| `tests/` | `test_ids.py` 编号规则单测（期望值由 bili 自己算出）；`smoke.py` 冒烟测试 |
 
 ## 目录结构：所有产物都在仓库内的 `runtime/`
 
@@ -37,6 +62,7 @@
 | 路径 | 内容 |
 |---|---|
 | `runtime/out/` | 转换产物（`<protocol>/<host>_<hash>.json`），`--install` 从这里装进 bili |
+| `runtime/out-wire/` | 经 `bili_wire_filter.py` 过滤的产物（布局同上），装之前再校验一遍 |
 | `runtime/reports/` | 批量校验报告（默认自动写 `verify-<时间>.txt`） |
 | `runtime/acp-state/` | 从 opencode 默认目录挪出来的 acp 状态（隔离区，转换时用 `--acp-dir` 指到这里） |
 | `runtime/backup/<时间戳>_<主机>/` | `backup.sh` 的备份产物 |
@@ -45,7 +71,7 @@
 
 ## 怎么跑
 
-> 改过代码先跑一遍冒烟测试：`python3 tests/smoke.py`（三种输入布局，用临时目录，不碰本机数据）。
+> 改过代码先跑测试：`python3 tests/test_ids.py`（编号规则）和 `python3 tests/smoke.py`（三种输入布局 + 过滤脚本，用临时目录，不碰本机数据）。
 
 流程只有一套。下面的命令在仓库目录里跑，产物全部落在仓库自己的 `runtime/` 下。
 
@@ -248,6 +274,7 @@ nohup env ACP_DUMP_BODY=1 bili start >> ~/.local/state/billion-context/dump-prox
 | `drifted: N covered id(s) missing`（N 很大且稳定，如 6316） | 宿主自己的 `/compact` 压缩把前缀吃了，那段永远不再发（良性，acp 活着也一样） | 不用管 |
 | `drifted: N`（N ≈ 2×某 provider 的消息数） | 该 provider 的 rc/fold 形态判错 | 按上节抓转储定形态，覆盖重转 |
 | `drifted: N`（个位数） | 尾部 churn（正常消息增删） | 不用管 |
+| `resent history drifted: N covered id(s) missing`（N 很大），随后 `preflight fail-fast 502` | 产物的编号规则与当前 bili 不一致（常见于 bili 升级前转的产物）：块被整体归档，历史原样发出，超过窗口 | 用当前脚本重转，再按「bili 版本与编号规则」过滤、校验 |
 | `preflight fail-fast 502 → EMERGENCY T1` | 首次接管的一次性开销：折叠后仍超窗→自动紧急压缩→转发 | 只出现一次属正常 |
 | verifier 的 `[WARN] active 块 effective 重叠` | acp 的块语义（消费了更早的块），bili 按并集处理 | 非错误 |
 | verifier 的 `[INFO] 空消息差异` | 空 assistant 在 bili 侧不产生 core | 语义等价 |
@@ -272,3 +299,5 @@ lsof -nP -iTCP:18787 -sTCP:LISTEN -t 2>/dev/null | while read -r p; do kill "$p"
 - 库里已无消息行的空壳状态自动跳过（不写产物）。
 - acp 块缺 `tier` 字段时按 tier=1、缺 `runId` 时自动补号（兼容 acp 后期版本的 null tier）。
 - `acp.jsonc` 里自定义 `storagePath` 的机器：bili 不探测该路径，隔离时记得用 `--acp-dir` 指向它。
+- 编号规则只在 bili 0.1.202–0.1.216 上用真实请求验证过。范围外的版本先按「bili 版本与编号规则」核对。
+- 校验器与转换器同源：B 组通过说明产物与算法一致、算法与 bili 0.1.216 一致，不能证明在更新的 bili 上生效。
